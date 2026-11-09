@@ -1,0 +1,23 @@
+# Every push to main publishes www/ to GitHub Pages. The phone app loads from there, so it updates itself.
+name: Publish app
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency: { group: pages, cancel-in-progress: true }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: { name: github-pages, url: '${{ steps.d.outputs.page_url }}' }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stamp the version
+        run: echo "{\"version\":\"$(date -u +%Y.%m.%d-%H%M)\",\"commit\":\"${GITHUB_SHA::7}\"}" > www/version.json
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: www }
+      - id: d
+        uses: actions/deploy-pages@v4

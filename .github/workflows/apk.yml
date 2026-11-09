@@ -1,0 +1,28 @@
+# Builds the Android APK in the cloud and attaches it to a release (download it on the phone from Releases).
+# Needed only when the native part changes: the app itself updates from GitHub Pages.
+name: Build APK
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - run: npm ci
+      - run: npx cap add android && npx cap sync android
+      - name: Build
+        run: cd android && ./gradlew assembleDebug --no-daemon
+      - run: cp android/app/build/outputs/apk/debug/app-debug.apk CPMaster-Studio.apk
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', github.run_number) }}
+          name: CPMaster Studio ${{ github.ref_type == 'tag' && github.ref_name || format('build {0}', github.run_number) }}
+          files: CPMaster-Studio.apk

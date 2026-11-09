@@ -1,0 +1,13 @@
+{
+  "appId": "com.cpmaster.studio",
+  "appName": "CPMaster Studio",
+  "webDir": "www",
+  "server": {
+    "url": "https://ayansagyngali.github.io/cpmaster-studio/",
+    "allowNavigation": ["ayansagyngali.github.io"]
+  },
+  "android": {
+    "backgroundColor": "#000000",
+    "allowMixedContent": false
+  }
+}
