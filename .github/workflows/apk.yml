@@ -18,6 +18,8 @@ jobs:
         with: { distribution: temurin, java-version: 21 }
       - run: npm ci
       - run: npx cap add android && npx cap sync android
+      - name: Always load the newest app (no WebView cache)
+        run: cp native/MainActivity.java android/app/src/main/java/com/cpmaster/studio/MainActivity.java
       - name: Build
         run: cd android && ./gradlew assembleDebug --no-daemon
       - run: cp android/app/build/outputs/apk/debug/app-debug.apk CPMaster-Studio.apk
