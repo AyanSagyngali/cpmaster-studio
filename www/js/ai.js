@@ -19,7 +19,7 @@ const offered = (models) => {
   const have = new Set(K.of('gemini').flatMap((k) => k.models || []));
   return have.size ? models.filter((m) => have.has(m)) : models;
 };
-const thinking = (m, level) => (/^gemini-[3-9]/.test(m) ? { thinkingLevel: level || (/lite/.test(m) ? 'minimal' : 'low') } : { thinkingBudget: 0 });
+const thinking = (m, level) => (/^gemini-[3-9]/.test(m) ? { thinkingLevel: level || 'minimal' } : { thinkingBudget: 0 });
 
 // one generateContent call over keys and models. kind: 'text' | 'fast' | 'image' | 'tts'
 async function call(kind, body, { signal, tries = 40, onWait, think } = {}) {
@@ -40,16 +40,19 @@ async function call(kind, body, { signal, tries = 40, onWait, think } = {}) {
       continue;
     }
     let r, j;
+    const tm = new AbortController(), timer = setTimeout(() => tm.abort(), kind === 'image' ? 90000 : 60000);   // a stuck request goes to the next model / key
+    const onAbort = () => tm.abort(); signal?.addEventListener('abort', onAbort, { once: true });
     try {
       r = await fetch(`${API}${m}:generateContent?key=${encodeURIComponent(k.key)}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: tm.signal,
         body: JSON.stringify(kind === 'image' || kind === 'tts' ? body : { ...body, generationConfig: { ...body.generationConfig, thinkingConfig: thinking(m, think) } }),
       });
       j = await r.json().catch(() => ({}));
     } catch (e) {
       if (signal?.aborted) throw new Stop();
+      if (tm.signal.aborted) { busy.set(m, Date.now() + 60000); lastErr = 'Gemini долго не отвечал'; continue; }
       lastErr = 'нет интернета'; await sleep(2000, signal); continue;
-    }
+    } finally { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); }
     if (r.ok) {
       const parts = j.candidates?.[0]?.content?.parts || [];
       if (kind === 'image' || kind === 'tts') {

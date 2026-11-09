@@ -8,7 +8,8 @@ export const PALETTE = 'ochre #c9a24b, terracotta #c4683f, mustard #d6a032, oliv
 const HAT_BOX = '-60 -90 120 120', ITEM_BOX = '-40 -120 80 160';
 const FX = 'arrows (a volley flying in arcs; dir 1 = to the right), dust, sparks (sword clash), smoke (rising column), fire (camp fire), torch, explosion (cannon, at a moment), coins (falling), birds (a flock crossing the sky), clouds (drifting, put y in the sky), flag (waving banner on a pole, needs "color"), water (waves along a river or sea, y = the water line)';
 
-export function scenePrompt({ text, idea, seconds, W, H, hero, lessons = '', extra = '' }) {
+export function scenePrompt({ text, idea, seconds, W, H, hero, lessons = '', extra = '', palette }) {
+  const args_palette = palette || PALETTE;
   const g0 = Math.round(H * 0.74), g1 = Math.round(H * 0.93), sec = Math.round(seconds * 10) / 10;
   return `You are the director and background artist of the Russian YouTube history channel «Историк». Stage ONE animated scene of ${sec} seconds for this moment of the voice-over:
 «${text}»
@@ -23,7 +24,7 @@ Return ONE JSON object:
  "fx": [{"kind": "…", "x": n, "y": n, "scale": n, "at": seconds, "dur": seconds | null, "dir": 1 | -1, "color": "#hex", "n": count}],
  "camera": [{"at": seconds, "move": "wide" | "push" | "pull" | "pan_left" | "pan_right" | "focus" | "shake", "target": actor index, "zoom": 1.1..1.4}]}
 
-THE PLACE — two SVG layers, viewBox="0 0 ${W} ${H}", flat 2D hand-drawn cartoon doodle: thick even black outlines (stroke="#1b1714", stroke-width 6–8, round caps and joins), flat solid fills, NO gradients, NO filters, NO text, NO <image>, NO <style>. Warm earthy palette: ${PALETTE}.
+THE PLACE — two SVG layers, viewBox="0 0 ${W} ${H}", flat 2D hand-drawn cartoon doodle: thick even black outlines (stroke="#1b1714", stroke-width 6–8, round caps and joins), flat solid fills, NO gradients, NO filters, NO text, NO <image>, NO <style>. Palette: ${args_palette}.
 - "back": fills the WHOLE frame: sky, far hills or city silhouette, the main buildings / walls / tents / ships of the place, detailed and historically right for the era (no crosses on mosques, nothing modern). 60–140 elements.
 - "front": a TRANSPARENT layer (no background rect) with only 1–3 foreground props at the left and right edges (bushes, rocks, barrels, a column, grass) that will slide faster than the rest; "" if nothing fits.
 - NO people, NO human figures, NO faces, NO animals in the SVG: people and animals are animated on top by code. Keep the ground strip y=${g0}..${g1} flat and clear.
@@ -43,7 +44,8 @@ ${extra}${lessons ? `\nLESSONS FROM THE OWNER (follow strictly):\n${lessons}` : 
 }
 
 // the place alone, for the stronger model (the choreography goes to the fast model in parallel)
-export function placePrompt({ text, idea, W, H, lessons = '' }) {
+export function placePrompt({ text, idea, W, H, lessons = '', palette, look }) {
+  const args_palette = palette || PALETTE;
   const g0 = Math.round(H * 0.74), g1 = Math.round(H * 0.93);
   return `You are the background artist of the Russian YouTube history channel «Историк» (flat 2D hand-drawn cartoon doodle, like a good picture book).
 Draw the PLACE for this moment of the voice-over: «${text}»
@@ -51,7 +53,7 @@ Visual idea: ${idea}
 Return ONE JSON object {"back": "<svg …>…</svg>", "front": "<svg …>…</svg>" | ""}.
 "back": viewBox="0 0 ${W} ${H}", fills the WHOLE frame. Layers: sky (pale, at most ONE sun or moon, a few clouds), far background (hills, mountains or a city skyline), the middle ground with the MAIN subject of the place drawn large and recognisable with real historical detail (e.g. Vienna: massive stone bastions with crenellations, a gate, Gothic spires behind; Istanbul: domes and slim minarets; a steppe camp: felt yurts with smoke holes; a port: wooden ships with masts and sails), then the ground. The ground strip y=${g0}..${g1} is flat, open and clear (figures stand there). Side props in the foreground (rocks, barrels, carts, plants) only at the far left and right.
 "front": a TRANSPARENT layer (no background rect) with 1–3 foreground props at the very left and right edges that overlap the frame border (bushes, a column, a rock, tall grass); "" if nothing fits.
-Style: thick even black outlines (stroke="#1b1714", stroke-width 6–8, stroke-linecap="round", stroke-linejoin="round"), flat solid fills, simple hatching strokes for texture (bricks, stones, wood planks, sand ripples), NO gradients, NO filters, NO text, NO <image>, NO <style>. Palette: ${PALETTE}. 80–180 elements. NO people, NO human figures, NO animals (they are animated on top).${lessons ? `\nLESSONS FROM THE OWNER (follow strictly):\n${lessons}` : ''}`;
+Style: thick even black outlines (stroke="#1b1714", stroke-width 6–8, stroke-linecap="round", stroke-linejoin="round"), flat solid fills, simple hatching strokes for texture (bricks, stones, wood planks, sand ripples), NO gradients, NO filters, NO text, NO <image>, NO <style>. Palette: ${args_palette}.${look ? ' ' + look : ''} 80–180 elements. NO people, NO human figures, NO animals (they are animated on top).${lessons ? `\nLESSONS FROM THE OWNER (follow strictly):\n${lessons}` : ''}`;
 }
 
 /* ---------------- SVG -> bitmaps (page side) ---------------- */

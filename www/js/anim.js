@@ -441,10 +441,11 @@ export function prepareScene(sc, dur) {
 
 export function drawScene(ctx, sc, t, dur, W, H, amp = 0) {
   prepareScene(sc, dur);
-  const k = H / 720, kx = W / (sc.w || W);
+  // Gemini places everything in the real frame (W x H); only the figure size follows the short side (scale 1 = 232 px at 720)
+  const k = Math.min(W, H) / 720, kx = 1;
   // where everyone is now (the camera can follow them)
-  const animals = sc._animals.map(({ an, fn }) => { const s = fn(t); const gaitNow = s.moving ? (s.act === 'run' ? 'run' : 'walk') : (an.gait === 'graze' ? 'graze' : 'stand'); return { an: { ...an, scale: (an.scale || 1) * k }, st: { x: s.x * kx, y: an.y * k, facing: s.facing, gait: gaitNow } }; });
-  const actors = sc._actors.map(({ a, fn }) => { const s = fn(t); return { ...a, x: s.x * kx, y: a.y * k, scale: (a.scale || 1) * k, facing: s.facing, pose: s.pose, mood: s.mood, moving: s.moving, act: s.act }; });
+  const animals = sc._animals.map(({ an, fn }) => { const s = fn(t); const gaitNow = s.moving ? (s.act === 'run' ? 'run' : 'walk') : (an.gait === 'graze' ? 'graze' : 'stand'); return { an: { ...an, scale: (an.scale || 1) * k }, st: { x: s.x * kx, y: an.y, facing: s.facing, gait: gaitNow } }; });
+  const actors = sc._actors.map(({ a, fn }) => { const s = fn(t); return { ...a, x: s.x * kx, y: a.y, scale: (a.scale || 1) * k, facing: s.facing, pose: s.pose, mood: s.mood, moving: s.moving, act: s.act }; });
   const targets = actors.map((a) => [a.x, a.y - 200 * a.scale]);
   const cam = camAt(sc.camera, t, dur, W, H, targets);
   const shake = cam.shake ? [Math.sin(t * 37) * 5 + Math.sin(t * 23) * 3, Math.cos(t * 31) * 4] : [0, 0];
@@ -457,9 +458,9 @@ export function drawScene(ctx, sc, t, dur, W, H, amp = 0) {
   view(0.55);
   if (sc.back) ctx.drawImage(sc.back, -W * 0.03, -H * 0.03, W * 1.06, H * 1.06); else { ctx.fillStyle = '#e9dcc0'; ctx.fillRect(0, 0, W, H); }
   const fx = sc.fx || [];
-  fx.filter((f) => f.kind === 'clouds' || f.kind === 'birds').forEach((f, i) => drawFx(ctx, { ...f, x: f.x * kx, y: f.y * k, scale: (f.scale || 1) * k }, t, W, H, (sc.seed || 1) + i));
+  fx.filter((f) => f.kind === 'clouds' || f.kind === 'birds').forEach((f, i) => drawFx(ctx, { ...f, x: f.x * kx, y: f.y, scale: (f.scale || 1) * k }, t, W, H, (sc.seed || 1) + i));
   view(1);
-  fx.filter((f) => f.kind === 'water' || f.kind === 'flag' || f.kind === 'fire' || f.kind === 'torch' || f.kind === 'smoke').forEach((f, i) => drawFx(ctx, { ...f, x: f.x * kx, y: f.y * k, scale: (f.scale || 1) * k }, t, W, H, (sc.seed || 1) + 10 + i));
+  fx.filter((f) => f.kind === 'water' || f.kind === 'flag' || f.kind === 'fire' || f.kind === 'torch' || f.kind === 'smoke').forEach((f, i) => drawFx(ctx, { ...f, x: f.x * kx, y: f.y, scale: (f.scale || 1) * k }, t, W, H, (sc.seed || 1) + 10 + i));
   // animals and people, further first; riders sit in the saddle and bob with it
   const items = [...animals.map((x) => ({ y: x.st.y, an: x })), ...actors.filter((a) => a.rider == null).map((a) => ({ y: a.y, a }))].sort((p, q) => p.y - q.y);
   for (const it of items) {
@@ -472,7 +473,7 @@ export function drawScene(ctx, sc, t, dur, W, H, amp = 0) {
       if (it.a.moving && it.a.act === 'run') drawFx(ctx, { kind: 'dust', x: it.a.x - 30 * it.a.facing * it.a.scale, y: it.a.y, scale: it.a.scale * 0.7, dir: -it.a.facing }, t, W, H, 7);
     }
   }
-  fx.filter((f) => ['arrows', 'dust', 'sparks', 'explosion', 'coins'].includes(f.kind)).forEach((f, i) => drawFx(ctx, { ...f, x: f.x * kx, y: f.y * k, scale: (f.scale || 1) * k }, t, W, H, (sc.seed || 1) + 20 + i));
+  fx.filter((f) => ['arrows', 'dust', 'sparks', 'explosion', 'coins'].includes(f.kind)).forEach((f, i) => drawFx(ctx, { ...f, x: f.x * kx, y: f.y, scale: (f.scale || 1) * k }, t, W, H, (sc.seed || 1) + 20 + i));
   if (sc.front) { view(1.3); ctx.drawImage(sc.front, -W * 0.05, -H * 0.05, W * 1.1, H * 1.1); }
   ctx.restore();
   if (sc.weather && sc.weather !== 'none') drawWeather(ctx, sc.weather, t, W, H, sc.seed || 1);

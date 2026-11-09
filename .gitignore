@@ -2,3 +2,4 @@ node_modules/
 android/
 www/demo.html
 *.log
+www/test.html
