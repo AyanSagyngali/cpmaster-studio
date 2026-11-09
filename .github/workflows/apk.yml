@@ -1,4 +1,5 @@
-# Builds the Android APK in the cloud and attaches it to a release (download it on the phone from Releases).
+# Builds the Android APK in the cloud, signs it with the ONE permanent key (repository secrets KEYSTORE_B64 + KEYSTORE_PASS)
+# so every new APK installs over the old one, and keeps only the newest release.
 # Needed only when the native part changes: the app itself updates from GitHub Pages.
 name: Build APK
 on:
@@ -21,8 +22,21 @@ jobs:
       - name: Always load the newest app (no WebView cache)
         run: cp native/MainActivity.java android/app/src/main/java/com/cpmaster/studio/MainActivity.java
       - name: Build
-        run: cd android && ./gradlew assembleDebug --no-daemon
-      - run: cp android/app/build/outputs/apk/debug/app-debug.apk CPMaster-Studio.apk
+        run: cd android && ./gradlew assembleRelease --no-daemon
+      - name: Sign with the permanent key
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > cpmaster.keystore
+          BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
+          $BT/zipalign -f 4 android/app/build/outputs/apk/release/app-release-unsigned.apk aligned.apk
+          $BT/apksigner sign --ks cpmaster.keystore --ks-key-alias cpmaster --ks-pass env:KEYSTORE_PASS --key-pass env:KEYSTORE_PASS --out CPMaster-Studio.apk aligned.apk
+          $BT/apksigner verify CPMaster-Studio.apk
+          rm cpmaster.keystore
+      - name: Remove older releases
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: gh release list --limit 50 --json tagName -q '.[].tagName' | while read t; do gh release delete "$t" --yes --cleanup-tag || true; done
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', github.run_number) }}
