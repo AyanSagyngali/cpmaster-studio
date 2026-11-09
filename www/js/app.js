@@ -121,9 +121,16 @@ async function start() {
     toast('Видео готово');
     if (S.tab === 'home') result(rec);
   } catch (e) {
+    const stage = job.stage;
     S.job = null;
-    toast(ctl.signal.aborted ? 'Остановлено' : e.message);
-    if (S.tab === 'home') home();
+    if (ctl.signal.aborted) { toast('Остановлено'); if (S.tab === 'home') home(); return; }
+    // the error stays on screen with the details needed to fix it (stage, error type, browser)
+    const info = `Этап: ${stage}\nОшибка: ${e?.name || ''} ${e?.message || e}\nБраузер: ${navigator.userAgent}\nWebCodecs: ${typeof VideoEncoder !== 'undefined' ? 'видео да' : 'видео нет'}, ${typeof AudioEncoder !== 'undefined' ? 'звук да' : 'звук нет'}, OffscreenCanvas: ${typeof OffscreenCanvas !== 'undefined' ? 'да' : 'нет'}`;
+    S.tab = 'home';
+    await show(`<div class="card"><b>Видео не получилось</b><pre style="white-space:pre-wrap;font-size:12px;color:var(--t2);margin:10px 0 0">${esc(info)}</pre></div>
+      <div style="margin-top:12px" class="row"><button class="btn ghost" id="cp">Скопировать</button><button class="btn" id="again">Назад</button></div>`, { title: 'Ошибка' });
+    $('#cp').onclick = async () => { try { await navigator.clipboard.writeText(info); toast('Скопировано'); } catch { toast('Выдели текст и скопируй'); } };
+    $('#again').onclick = () => home();
   } finally { try { await lock?.release(); } catch { /* ok */ } }
 }
 async function thumbData(b) {
