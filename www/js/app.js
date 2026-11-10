@@ -287,7 +287,14 @@ document.querySelectorAll('.tabs button').forEach((b) => (b.onclick = () => tab(
 
 (async () => {
   Object.assign(S.settings, await kv.get('settings', {}));
-  try { const v = await (await fetch('version.json', { cache: 'no-store' })).json(); $('#ver').textContent = v.version; } catch { /* local */ }
+  try {
+    const v = await (await fetch('version.json', { cache: 'no-store' })).json(); $('#ver').textContent = v.version;
+    // Safari keeps old files for a while: a newer version on GitHub reloads the page under a new address, so every file comes fresh
+    const b = globalThis.BUILD;
+    if (v.commit && b && b !== '__BUILD__' && v.commit !== b && sessionStorage.getItem('reloadedFor') !== v.commit && !S.job) {
+      sessionStorage.setItem('reloadedFor', v.commit); location.replace(`${location.pathname}?v=${v.commit}`); return;
+    }
+  } catch { /* local */ }
   try { Notification.requestPermission?.(); } catch { /* ok */ }
   await K.load();
   if (!K.ready()) { await K.checkAll(); }
