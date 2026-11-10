@@ -106,7 +106,8 @@ async function start() {
   try {
     const r = await make({ style: st.style, topic, kind: st.kind, minutes: st.minutes, lang: st.lang, voice: st.voice, lessons: await lessons(), signal: ctl.signal,
       onStep: (s, d, t, x) => { job.stage = s; job.counts[s] = [d, t]; job.text = x; upd(); },
-      onScene: (b) => { job.thumbs.push(b); upd(); },
+      // a small COPY: the scene bitmaps are handed over to the montage thread later and stop existing here
+      onScene: (b) => { const c = document.createElement('canvas'); c.height = 184; c.width = Math.round(184 * b.width / b.height); c.getContext('2d').drawImage(b, 0, 0, c.width, c.height); job.thumbs.push(c); upd(); },
       onLog: (m) => { job.log.push(m); upd(); } });
     job.stage = 'montage'; job.text = 'Телефон монтирует видео'; upd();
     const mp4 = await montage(r.job, { signal: ctl.signal, onProgress: (p) => { job.frame = p.frame; job.total = p.total; job.fps = p.fps; job.eta = p.eta; if (p.preview) job.preview = p.preview; upd(); } });
