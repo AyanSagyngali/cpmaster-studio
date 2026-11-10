@@ -112,9 +112,13 @@ async function start() {
     job.stage = 'montage'; job.text = 'Телефон монтирует видео'; upd();
     const mp4 = await montage(r.job, { signal: ctl.signal, onProgress: (p) => { job.frame = p.frame; job.total = p.total; job.fps = p.fps; job.eta = p.eta; if (p.preview) job.preview = p.preview; upd(); } });
     job.text = 'Сохраняю'; upd();
-    const id = uid(), ref = await SV.put(id, mp4);
-    const m = await meta({ style: st.style, topic, title: r.title, script: r.script, lang: st.lang });
-    const thumb = job.thumbs[0] ? await thumbData(job.thumbs[0]) : '';
+    // the finished video is never lost: phone file first, the app's own storage if that fails, and it plays from memory right away
+    const id = uid();
+    let ref;
+    try { ref = await SV.put(id, mp4); } catch (e) { job.log.push('Файл в Документы не записался: ' + e.message + ' — храню в приложении'); ref = await SV.putLocal(id, mp4); }
+    liveUrls[id] = URL.createObjectURL(new Blob([mp4], { type: 'video/mp4' }));
+    const m = await meta({ style: st.style, topic, title: r.title, script: r.script, lang: st.lang }).catch(() => ({}));
+    let thumb = ''; try { thumb = job.thumbs[0] ? await thumbData(job.thumbs[0]) : ''; } catch { /* no thumbnail */ }
     const rec = { id, created: Date.now(), topic, title: m.title || r.title, description: m.description, tags: m.tags || [], style: st.style, kind: st.kind, seconds: Math.round(r.job.duration), voice: r.voice, ref, thumb, rating: 0, script: r.script, took: Math.round((Date.now() - job.started) / 1000) };
     await videos.put(rec);
     S.job = null;
@@ -164,8 +168,10 @@ function paintProgress() {
 }
 
 /* ---------------- result ---------------- */
+const liveUrls = {};                                                    // videos made in this session play straight from memory
 async function result(rec) {
-  const src = await SV.url(rec.ref);
+  let src = liveUrls[rec.id];
+  if (!src) try { src = await SV.url(rec.ref); } catch { src = ''; }
   await show(`<video src="${esc(src)}" controls playsinline autoplay></video>
     <h2 style="font-size:18px;color:var(--t1);margin-top:14px">${esc(rec.title)}</h2>
     <div class="row"><button class="btn" id="dl">Скачать</button><button class="btn ghost" id="sh">Поделиться</button></div>

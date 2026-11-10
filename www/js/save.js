@@ -8,9 +8,11 @@ export const native = !!(Cap?.isNativePlatform?.() && FS);
 
 const b64 = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
 
+export async function putLocal(id, bytes) { await blobs.put(id, new Blob([bytes], { type: 'video/mp4' })); return { kind: 'idb', id }; }
+
 // -> a reference to keep in the video record
 export async function put(id, bytes, onProgress) {
-  if (!native) { await blobs.put(id, new Blob([bytes], { type: 'video/mp4' })); return { kind: 'idb', id }; }
+  if (!native) return putLocal(id, bytes);
   const path = `CPMaster/${id}.mp4`, CH = 3 * 1024 * 1024;                 // in pieces: a whole video in one base64 string would not fit the phone's memory
   for (let i = 0; i < bytes.length; i += CH) {
     const data = b64(bytes.subarray(i, i + CH));
