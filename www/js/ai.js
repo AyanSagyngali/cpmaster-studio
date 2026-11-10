@@ -19,7 +19,13 @@ const offered = (models) => {
   const have = new Set(K.of('gemini').flatMap((k) => k.models || []));
   return have.size ? models.filter((m) => have.has(m)) : models;
 };
-const thinking = (m, level) => (/^gemini-[3-9]/.test(m) ? { thinkingLevel: level || 'minimal' } : { thinkingBudget: 0 });
+// a model that refuses a thinking level steps down: minimal -> low -> the model's own default (models change without notice)
+const THINK_STEPS = ['minimal', 'low', null], thinkStep = {};
+const thinking = (m, level) => {
+  if (!/^gemini-[3-9]/.test(m)) return thinkStep[m] ? null : { thinkingBudget: 0 };
+  const lv = THINK_STEPS.slice(THINK_STEPS.indexOf(level || 'minimal')).concat(null)[thinkStep[m] || 0];
+  return lv ? { thinkingLevel: lv } : null;
+};
 
 // one generateContent call over keys and models. kind: 'text' | 'fast' | 'image' | 'tts'
 async function call(kind, body, { signal, tries = 40, onWait, think } = {}) {
@@ -45,7 +51,7 @@ async function call(kind, body, { signal, tries = 40, onWait, think } = {}) {
     try {
       r = await fetch(`${API}${m}:generateContent?key=${encodeURIComponent(k.key)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: tm.signal,
-        body: JSON.stringify(kind === 'image' || kind === 'tts' ? body : { ...body, generationConfig: { ...body.generationConfig, thinkingConfig: thinking(m, think) } }),
+        body: JSON.stringify(kind === 'image' || kind === 'tts' || !thinking(m, think) ? body : { ...body, generationConfig: { ...body.generationConfig, thinkingConfig: thinking(m, think) } }),
       });
       j = await r.json().catch(() => ({}));
     } catch (e) {
@@ -77,6 +83,7 @@ async function call(kind, body, { signal, tries = 40, onWait, think } = {}) {
     }
     if (r.status === 503 || r.status === 500 || r.status === 504) { busy.set(m, Date.now() + 20000); lastErr = 'Gemini перегружен'; await sleep(600, signal); continue; }
     if (r.status === 404) { busy.set(m, Date.now() + 864e5); continue; }
+    if (r.status === 400 && /thinking/i.test(msg) && kind !== 'image' && kind !== 'tts' && (thinkStep[m] || 0) < 2) { thinkStep[m] = (thinkStep[m] || 0) + 1; continue; }
     if (r.status === 400 && /API key/i.test(msg)) { K.bad(k, 'ключ не принят'); continue; }
     if (r.status === 403) { K.bad(k, 'доступ запрещён'); continue; }
     lastErr = `Gemini: ${r.status} ${msg.slice(0, 120)}`;
