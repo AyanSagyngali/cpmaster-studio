@@ -8,7 +8,12 @@ export const native = !!(Cap?.isNativePlatform?.() && FS);
 
 const b64 = (u8) => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
 
-export async function putLocal(id, bytes) { await blobs.put(id, new Blob([bytes], { type: 'video/mp4' })); return { kind: 'idb', id }; }
+// Safari sometimes refuses Blobs in IndexedDB: then the raw bytes are stored
+export async function putLocal(id, bytes) {
+  try { await blobs.put(id, new Blob([bytes], { type: 'video/mp4' })); } catch { await blobs.put(id, bytes.slice()); }
+  return { kind: 'idb', id };
+}
+const asBlob = (b) => (b && !(b instanceof Blob) ? new Blob([b], { type: 'video/mp4' }) : b);
 
 // -> a reference to keep in the video record
 export async function put(id, bytes, onProgress) {
@@ -26,7 +31,8 @@ export async function put(id, bytes, onProgress) {
 
 export async function url(ref) {
   if (ref.kind === 'file') return Cap.convertFileSrc(ref.uri);
-  const b = await blobs.get(ref.id);
+  if (ref.kind === 'mem') return '';
+  const b = asBlob(await blobs.get(ref.id));
   return b ? URL.createObjectURL(b) : '';
 }
 
@@ -38,11 +44,11 @@ export async function download(ref, name) {
 }
 export async function share(ref, title) {
   if (ref.kind === 'file' && SH) return SH.share({ title, files: [ref.uri] });
-  const b = await blobs.get(ref.id);
+  const b = asBlob(await blobs.get(ref.id));
   if (navigator.canShare?.({ files: [new File([b], 'video.mp4', { type: 'video/mp4' })] })) return navigator.share({ title, files: [new File([b], `${title}.mp4`, { type: 'video/mp4' })] });
   return download(ref, title);
 }
 export async function remove(ref) {
   if (ref.kind === 'file') { try { await FS.deleteFile({ path: ref.path, directory: 'DOCUMENTS' }); } catch { /* already gone */ } }
-  else await blobs.del(ref.id);
+  else if (ref.kind === 'idb') await blobs.del(ref.id);
 }

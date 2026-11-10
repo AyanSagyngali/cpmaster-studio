@@ -20,7 +20,10 @@ const anims = new Set();                                                // runni
 function show(html, { title = 'CPMaster Studio', back = null, tabs = true } = {}) {
   anims.forEach((stop) => stop()); anims.clear();
   view.className = 'out';
-  setTimeout(() => {
+  // each screen resolves its own render: a double tap must not hand the buttons to a page that is replaced right after
+  let done; const shown = new Promise((ok) => (done = ok));
+  clearTimeout(show.pending);                                            // the newer screen wins; the older one never renders
+  show.pending = setTimeout(() => {
     view.innerHTML = html; view.className = ''; void view.offsetWidth; view.style.animation = 'none'; void view.offsetWidth; view.style.animation = '';
     $('#title').textContent = title;
     $('#back').hidden = !back; $('#back').onclick = back;
@@ -28,8 +31,9 @@ function show(html, { title = 'CPMaster Studio', back = null, tabs = true } = {}
     document.querySelectorAll('.tabs button').forEach((b) => (b.dataset.tab === S.tab ? b.setAttribute('aria-current', 'page') : b.removeAttribute('aria-current')));
     scrollTo(0, 0);
     view.dispatchEvent(new Event('shown'));
+    done();
   }, 130);
-  return new Promise((ok) => view.addEventListener('shown', ok, { once: true }));
+  return shown;
 }
 const lessons = async () => (await kv.get('lessons', [])).map((l, i) => `${i + 1}. ${l}`).join('\n');
 
@@ -110,12 +114,23 @@ async function start() {
       onScene: (b) => { const c = document.createElement('canvas'); c.height = 184; c.width = Math.round(184 * b.width / b.height); c.getContext('2d').drawImage(b, 0, 0, c.width, c.height); job.thumbs.push(c); upd(); },
       onLog: (m) => { job.log.push(m); upd(); } });
     job.stage = 'montage'; job.text = 'Телефон монтирует видео'; upd();
-    const mp4 = await montage(r.job, { signal: ctl.signal, onProgress: (p) => { job.frame = p.frame; job.total = p.total; job.fps = p.fps; job.eta = p.eta; if (p.preview) job.preview = p.preview; upd(); } });
+    // Android takes the video encoder away from an app that is not on screen: an interrupted montage waits for the user to come back and runs again
+    let mp4;
+    for (let attempt = 1; ; attempt++) {
+      try { mp4 = await montage(r.job, { signal: ctl.signal, onProgress: (p) => { job.frame = p.frame; job.total = p.total; job.fps = p.fps; job.eta = p.eta; if (p.preview) job.preview = p.preview; upd(); } }); break; }
+      catch (e) {
+        if (ctl.signal.aborted || attempt >= 4) throw e;
+        job.log.push(`Монтаж прервался (${e.message}). ${document.hidden ? 'Продолжу, когда вернёшься в приложение' : 'Повторяю'}`);
+        if (document.hidden) { job.text = 'Ждёт тебя: вернись в приложение, монтаж продолжится'; upd(); await new Promise((ok) => document.addEventListener('visibilitychange', function f() { if (!document.hidden) { document.removeEventListener('visibilitychange', f); ok(); } })); }
+        job.text = `Монтаж, попытка ${attempt + 1}`; job.frame = 0; upd();
+        await new Promise((ok) => setTimeout(ok, 800));
+      }
+    }
     job.text = 'Сохраняю'; upd();
     // the finished video is never lost: phone file first, the app's own storage if that fails, and it plays from memory right away
     const id = uid();
     let ref;
-    try { ref = await SV.put(id, mp4); } catch (e) { job.log.push('Файл в Документы не записался: ' + e.message + ' — храню в приложении'); ref = await SV.putLocal(id, mp4); }
+    try { ref = await SV.put(id, mp4); } catch (e) { job.log.push('Файл в Документы не записался: ' + e.message + ' — храню в приложении'); try { ref = await SV.putLocal(id, mp4); } catch (e2) { job.log.push('Память браузера не приняла файл: ' + e2.message); ref = { kind: 'mem', id }; } }
     liveUrls[id] = URL.createObjectURL(new Blob([mp4], { type: 'video/mp4' }));
     const m = await meta({ style: st.style, topic, title: r.title, script: r.script, lang: st.lang }).catch(() => ({}));
     let thumb = ''; try { thumb = job.thumbs[0] ? await thumbData(job.thumbs[0]) : ''; } catch { /* no thumbnail */ }
@@ -169,19 +184,34 @@ function paintProgress() {
 
 /* ---------------- result ---------------- */
 const liveUrls = {};                                                    // videos made in this session play straight from memory
-async function result(rec) {
+async function result(rec, { post = false } = {}) {
   let src = liveUrls[rec.id];
   if (!src) try { src = await SV.url(rec.ref); } catch { src = ''; }
   await show(`<video src="${esc(src)}" controls playsinline autoplay></video>
     <h2 style="font-size:18px;color:var(--t1);margin-top:14px">${esc(rec.title)}</h2>
-    <div class="row"><button class="btn" id="dl">Скачать</button><button class="btn ghost" id="sh">Поделиться</button></div>
+    <div class="row"><button class="btn" id="dl">Скачать</button><button class="btn ghost" id="sh">Залить в соцсеть</button></div>
+    <div class="row" id="nets" ${post ? '' : 'hidden'}><button class="btn small ghost" data-net="TikTok">TikTok</button><button class="btn small ghost" data-net="YouTube">YouTube</button><button class="btn small ghost" data-net="Instagram">Instagram</button></div>
     <h2>Оценка (учит программу)</h2><div class="rate">${Array.from({ length: 10 }, (_, i) => `<button data-r="${i + 1}" aria-pressed="${rec.rating === i + 1}">${i + 1}</button>`).join('')}</div>
     <textarea id="why" rows="2" style="margin-top:8px" placeholder="Что не так или что понравилось? (необязательно)"></textarea>
     <h2>Для YouTube</h2><div class="card stack"><div>${esc(rec.title)}</div><div style="color:var(--t2);font-size:14px;white-space:pre-wrap">${esc(rec.description || '')}</div><div style="color:var(--t3);font-size:13px">${esc((rec.tags || []).join(', '))}</div><button class="btn small ghost" id="copy">Скопировать</button></div>
     <p class="note n">${rec.seconds} с · голос ${esc(rec.voice)} · сделано за ${Math.floor(rec.took / 60)} мин ${rec.took % 60} с</p>`,
   { title: 'Готово', back: () => (S.tab === 'history' ? history() : home()) });
-  $('#dl').onclick = async () => toast(await SV.download(rec.ref, rec.title));
-  $('#sh').onclick = () => SV.share(rec.ref, rec.title).catch(() => {});
+  $('#dl').onclick = async () => { if (rec.ref.kind === 'mem') { const a = document.createElement('a'); a.href = src; a.download = `${rec.title}.mp4`; a.click(); return; } toast(await SV.download(rec.ref, rec.title)); };
+  // posting goes through the phone's share sheet: the text is copied first, the user picks the app, pastes it as the caption
+  $('#sh').onclick = () => { $('#nets').hidden = !$('#nets').hidden; };
+  view.querySelectorAll('[data-net]').forEach((b) => (b.onclick = async () => {
+    const tags = (rec.tags || []).map((t) => '#' + String(t).replace(/[\s#]+/g, '')).join(' ');
+    const text = b.dataset.net === 'YouTube' ? `${rec.title}
+
+${rec.description || ''}
+
+${tags}` : `${rec.title} ${tags}`;
+    try { await navigator.clipboard.writeText(text); } catch { /* clipboard blocked */ }
+    toast(`Подпись скопирована. В списке выбери ${b.dataset.net} и вставь её`);
+    rec.posted = [...new Set([...(rec.posted || []), b.dataset.net])]; videos.put(rec);
+    if (rec.ref.kind === 'mem') { const f = new File([await (await fetch(src)).blob()], `${rec.title}.mp4`, { type: 'video/mp4' }); navigator.share?.({ files: [f], title: rec.title }).catch(() => {}); }
+    else SV.share(rec.ref, rec.title).catch(() => {});
+  }));
   $('#copy').onclick = async () => { await navigator.clipboard?.writeText(`${rec.title}\n\n${rec.description}\n\n${(rec.tags || []).join(', ')}`); toast('Скопировано'); };
   view.querySelectorAll('[data-r]').forEach((b) => (b.onclick = async () => {
     rec.rating = +b.dataset.r; await videos.put(rec);
@@ -228,9 +258,10 @@ async function chat() {
 /* ---------------- history ---------------- */
 async function history() {
   const list = await videos.all();
-  await show(list.length ? list.map((v) => `<button class="item" data-open="${v.id}">${v.thumb ? `<img src="${v.thumb}" alt="">` : '<span class="ph"></span>'}<div><b>${esc(v.title)}</b><span class="n">${new Date(v.created).toLocaleString('ru', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · ${v.kind === 'short' ? 'шортс' : 'лонг'} · ${v.seconds} с${v.rating ? ` · ${v.rating}/10` : ''}</span></div></button>`).join('')
+  await show(list.length ? list.map((v) => `<button class="item" data-open="${v.id}">${v.thumb ? `<img src="${v.thumb}" alt="">` : '<span class="ph"></span>'}<div><b>${esc(v.title)}</b><span class="n">${new Date(v.created).toLocaleString('ru', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })} · ${v.kind === 'short' ? 'шортс' : 'лонг'} · ${v.seconds} с${v.rating ? ` · ${v.rating}/10` : ''}${v.posted?.length ? ` · залито: ${esc(v.posted.join(', '))}` : ''}</span></div></button><button class="btn small ghost" data-post="${v.id}" style="margin:-4px 0 10px">Залить</button>`).join('')
     + `<div style="margin-top:16px"><button class="btn ghost" id="clear">Очистить все видео</button></div>` : '<p class="empty">Здесь будут твои видео.</p>', { title: 'Видео' });
   view.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => result(list.find((v) => v.id === b.dataset.open))));
+  view.querySelectorAll('[data-post]').forEach((b) => (b.onclick = () => result(list.find((v) => v.id === b.dataset.post), { post: true })));
   const c = $('#clear'); if (c) c.onclick = async () => { if (!confirm('Удалить все видео с телефона?')) return; for (const v of list) { await SV.remove(v.ref); await videos.del(v.id); } toast('Память освобождена'); history(); };
 }
 

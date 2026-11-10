@@ -123,8 +123,8 @@ export async function make({ style, topic, kind, minutes = 10, lang = 'ru', voic
 export function montage(job, { signal, onProgress } = {}) {
   return new Promise((ok, bad) => {
     const w = new Worker(new URL('./render-worker.js', import.meta.url), { type: 'module' });
-    const transfer = [job.audio.buffer, job.env.buffer];
-    for (const it of job.timeline) for (const b of [it.scene?.back, it.scene?.front, ...(it.scene?.actors || []).flatMap((a) => [a.hat, a.item])]) if (b && !transfer.includes(b)) transfer.push(b);
+    // nothing is transferred: the page keeps its own scenes and sound, so an interrupted montage can simply run again
+    const transfer = [];
     signal?.addEventListener('abort', () => { w.postMessage({ type: 'stop' }); setTimeout(() => w.terminate(), 500); bad(new Error('Остановлено')); }, { once: true });
     w.onmessage = (e) => {
       const m = e.data;

@@ -4,6 +4,9 @@ import { Muxer, ArrayBufferTarget } from '../vendor/mp4-muxer.mjs';
 import { drawScene, drawTransition, drawPyramid, drawCollage, drawWord, drawPlate, drawTitle } from './anim.js';
 
 let stop = false;
+// any crash inside the thread is reported with its real reason (the page only sees «error» otherwise)
+self.addEventListener('error', (e) => self.postMessage({ type: 'error', message: e.message || 'ошибка потока' }));
+self.addEventListener('unhandledrejection', (e) => self.postMessage({ type: 'error', message: String(e.reason?.message || e.reason) }));
 self.onmessage = async (e) => {
   if (e.data.type === 'stop') { stop = true; return; }
   if (e.data.type !== 'render') return;
@@ -36,7 +39,7 @@ async function render(job) {
   const vcfg = await pickVideo(W, H, fps, job.bitrate || (W * H > 1e6 ? 3_000_000 : 2_200_000));
   const [acfg, aname] = await pickAudio(job.rate);
   const target = new ArrayBufferTarget();
-  const muxer = new Muxer({ target, fastStart: 'in-memory', video: { codec: 'avc', width: W, height: H, frameRate: fps }, ...(acfg ? { audio: { codec: aname, numberOfChannels: 1, sampleRate: job.rate } } : {}) });
+  const muxer = new Muxer({ target, fastStart: false /* writes straight into one buffer: half the memory of 'in-memory' on weak phones */, video: { codec: 'avc', width: W, height: H, frameRate: fps }, ...(acfg ? { audio: { codec: aname, numberOfChannels: 1, sampleRate: job.rate } } : {}) });
   let failed = null;
   const venc = new VideoEncoder({ output: (c, m) => muxer.addVideoChunk(c, m), error: (e) => { failed = e; } });
   venc.configure(vcfg);
