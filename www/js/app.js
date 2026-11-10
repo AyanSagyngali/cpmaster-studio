@@ -132,10 +132,12 @@ async function start() {
     let ref;
     try { ref = await SV.put(id, mp4); } catch (e) { job.log.push('Файл в Документы не записался: ' + e.message + ' — храню в приложении'); try { ref = await SV.putLocal(id, mp4); } catch (e2) { job.log.push('Память браузера не приняла файл: ' + e2.message); ref = { kind: 'mem', id }; } }
     liveUrls[id] = URL.createObjectURL(new Blob([mp4], { type: 'video/mp4' }));
-    const m = await meta({ style: st.style, topic, title: r.title, script: r.script, lang: st.lang }).catch(() => ({}));
+    // from here on nothing may lose the finished video: every step is optional, the video is shown in any case
+    let m = {}; try { const x = await meta({ style: st.style, topic, title: r.title, script: r.script, lang: st.lang }); if (x && typeof x === 'object') m = x; } catch { /* no title help */ }
     let thumb = ''; try { thumb = job.thumbs[0] ? await thumbData(job.thumbs[0]) : ''; } catch { /* no thumbnail */ }
-    const rec = { id, created: Date.now(), topic, title: m.title || r.title, description: m.description, tags: m.tags || [], style: st.style, kind: st.kind, seconds: Math.round(r.job.duration), voice: r.voice, ref, thumb, rating: 0, script: r.script, took: Math.round((Date.now() - job.started) / 1000) };
-    await videos.put(rec);
+    const rec = { id, created: Date.now(), topic, title: String(m.title || r.title || topic), description: String(m.description || ''), tags: Array.isArray(m.tags) ? m.tags.map(String) : [], style: st.style, kind: st.kind, seconds: Math.round(r.job.duration), voice: r.voice, ref, thumb, rating: 0, script: r.script, took: Math.round((Date.now() - job.started) / 1000) };
+    try { await videos.put(rec); } catch (e) { job.log.push('История не записалась: ' + e.message); rec.note = 'Не сохранилось в историю: ' + e.message + '. Нажми «Скачать», чтобы не потерять видео.'; }
+    if (job.log.length && !rec.note && ref.kind === 'mem') rec.note = job.log.slice(-1)[0];
     S.job = null;
     try { new Notification('Видео готово', { body: rec.title }); } catch { /* no notifications here */ }
     toast('Видео готово');
@@ -194,7 +196,7 @@ async function result(rec, { post = false } = {}) {
     <h2>Оценка (учит программу)</h2><div class="rate">${Array.from({ length: 10 }, (_, i) => `<button data-r="${i + 1}" aria-pressed="${rec.rating === i + 1}">${i + 1}</button>`).join('')}</div>
     <textarea id="why" rows="2" style="margin-top:8px" placeholder="Что не так или что понравилось? (необязательно)"></textarea>
     <h2>Для YouTube</h2><div class="card stack"><div>${esc(rec.title)}</div><div style="color:var(--t2);font-size:14px;white-space:pre-wrap">${esc(rec.description || '')}</div><div style="color:var(--t3);font-size:13px">${esc((rec.tags || []).join(', '))}</div><button class="btn small ghost" id="copy">Скопировать</button></div>
-    <p class="note n">${rec.seconds} с · голос ${esc(rec.voice)} · сделано за ${Math.floor(rec.took / 60)} мин ${rec.took % 60} с</p>`,
+    ${rec.note ? `<p class="note">${esc(rec.note)}</p>` : ''}<p class="note n">${rec.seconds} с · голос ${esc(rec.voice)} · сделано за ${Math.floor(rec.took / 60)} мин ${rec.took % 60} с</p>`,
   { title: 'Готово', back: () => (S.tab === 'history' ? history() : home()) });
   $('#dl').onclick = async () => { if (rec.ref.kind === 'mem') { const a = document.createElement('a'); a.href = src; a.download = `${rec.title}.mp4`; a.click(); return; } toast(await SV.download(rec.ref, rec.title)); };
   // posting goes through the phone's share sheet: the text is copied first, the user picks the app, pastes it as the caption
