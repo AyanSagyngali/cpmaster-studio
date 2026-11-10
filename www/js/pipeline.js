@@ -5,12 +5,21 @@ import * as EL from './eleven.js';
 import * as A from './audio.js';
 import * as F from './formats.js';
 import { makeScene, heroParts, PALETTE } from './scene.js';
+import { drawCardShot } from './cards.js';
 
 export const STAGES = [['script', 'Сценарий'], ['voice', 'Озвучка'], ['scenes', 'Сцены'], ['montage', 'Монтаж'], ['done', 'Готово']];
 const LOOKS = {
   istorik: { palette: PALETTE, look: '' },
   razgon: { palette: 'deep navy #1d2440, dusk purple #3b2f55, warm amber #f2a541, soft gold #f6c86a, coral #e0664f, teal shadow #2f5d62, fog #c9c3d6, and black #0d0d12', look: 'Cinematic low-key light: ONE strong light source (a window, a lamp, a sunset), deep purple and navy shadows, warm amber highlights, soft glow shapes.' },
 };
+// the editor's pass never breaks a video: a bad answer keeps the draft
+async function polish(lines, o) {
+  try {
+    const r = await AI.json(F.polishPrompt({ ...o, lines }), { signal: o.signal, onWait: o.onWait });
+    const out = (r.lines || []).filter((l) => l && String(l.text || '').trim());
+    return out.length === lines.length ? out : lines;
+  } catch (e) { if (o.signal?.aborted) throw e; return lines; }
+}
 const pool = async (items, n, fn) => {                                // n requests at once, keeps order
   const out = new Array(items.length); let i = 0;
   await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) { const k = i++; out[k] = await fn(items[k], k); } }));
@@ -28,15 +37,17 @@ export async function make({ style, topic, kind, minutes = 10, lang = 'ru', voic
   let lines, plan;
   if (short) {
     const r = await AI.json(F.linesPrompt({ style, topic, lang, lessons, words: lang === 'ru' ? 120 : 140, n: 12, short: true }), { signal, onWait: wait });
-    lines = r.lines; plan = { title: topic, hero: '', hero_look: '' };
+    step('script', 0, 1, 'Редактор усиливает сценарий');
+    lines = await polish(r.lines || [], { style, topic, lang, lessons, short: true, signal, onWait: wait }); plan = { title: topic, hero: '', hero_look: '' };
   } else {
     plan = await AI.json(F.planPrompt({ style, topic, minutes, lang, lessons }), { signal, onWait: wait });
     const words = Math.round(minutes * (lang === 'ru' ? 130 : 150)), per = Math.round(words / plan.chapters.length);
     let done = 0;
     const parts = await pool(plan.chapters, 4, async (c, k) => {
       const r = await AI.json(F.linesPrompt({ style, topic, lang, lessons, words: per, n: Math.max(4, Math.round(per / 20)), plan, chapter: c, k }), { signal, onWait: wait });
+      const out = await polish(r.lines || [], { style, topic, lang, lessons, short: false, signal, onWait: wait });
       step('script', ++done, plan.chapters.length, `Глава ${done} из ${plan.chapters.length}`);
-      return r.lines;
+      return out;
     });
     lines = parts.flat();
   }
@@ -84,12 +95,15 @@ export async function make({ style, topic, kind, minutes = 10, lang = 'ru', voic
       segs[j] = { t0: base + tAt(a), t1: base + tAt(b) };
       // words for the Shorts captions
       let wpos = a;
-      for (const w of lines[j].text.split(/\s+/)) { const ws = p.text.indexOf(w, wpos); if (ws < 0) continue; words.push({ t0: base + tAt(ws), t1: base + tAt(ws + w.length), w: w.replace(/[«»"“”]/g, '') }); wpos = ws + w.length; }
+      for (const w of lines[j].text.split(/\s+/)) { const ws = p.text.indexOf(w, wpos); if (ws < 0) continue; words.push({ j, t0: base + tAt(ws), t1: base + tAt(ws + w.length), w: w.replace(/[«»"“”]/g, '') }); wpos = ws + w.length; }
     }
     at += p.pcm.length + gap;
   }
   for (let j = 0; j < segs.length; j++) { segs[j].t0 = j ? segs[j - 1].t1 : 0; if (j === segs.length - 1) segs[j].t1 = total / A.RATE + 0.6; }
   const duration = total / A.RATE + 0.6;
+
+  const theme = F.STYLES[style].theme;
+  if (F.STYLES[style].engine === 'cards') return cardVideo({ style, lang, lines, segs, words, duration, voiceTrack, short, W, H, fps, theme, plan, topic, useEleven, signal, step, wait, onScene });
 
   /* 3. scenes: the hero once, then every scene (Gemini draws the place, directs the figures) */
   const L = LOOKS[style];
@@ -117,6 +131,50 @@ export async function make({ style, topic, kind, minutes = 10, lang = 'ru', voic
   const job = { W, H, fps, duration, timeline, words: short ? words : [], plates: [], audio, rate: A.RATE, env: A.envelope(voiceTrack, 50) };
   const script = lines.map((l) => l.text).join(' ');
   return { job, plan, lines, script, title: plan.title || topic, voice: useEleven ? 'ElevenLabs' : 'Gemini' };
+}
+
+// when Gemini can not lay out the cards, they are built from the line itself
+const ORD = { первый: 1, первая: 1, первое: 1, второй: 2, вторая: 2, второе: 2, третий: 3, третья: 3, третье: 3, четвертый: 4, четвёртый: 4, четвертая: 4, четвёртая: 4, пятый: 5, пятая: 5, first: 1, second: 2, third: 3, fourth: 4, fifth: 5 };
+const ordinal = (t) => ORD[String(t).toLowerCase().match(/^[\p{L}]+/u)?.[0]] || 0;
+const ICONS = ['💡', '🔥', '⚡', '🎯', '🤔', '🚀', '👀', '✨'];
+function localCard(text, j, total, of) {
+  const words = text.replace(/[«»"]/g, '').split(/\s+/), head = words.slice(0, 5).join(' ').replace(/[,.:;—-]+$/, '');
+  const n = ordinal(text);
+  if (n) { const name = text.split(/[—–-]/)[1]?.split(/[,.]/)[0]?.trim() || words.slice(1, 3).join(' '); return { card: { kind: 'step', n, of: Math.max(of, n), icon: '⭐', title: name }, mood: 'happy', hot: [words[0]] }; }
+  if (j === total - 1) return { card: { kind: 'title', icon: '💬', text: head, sub: 'Пиши в комментах' }, mood: 'wink', hot: [] };
+  if (/^(минус|но|правда|однако|косяк|зато|but|however|the catch)/i.test(text)) return { card: { kind: 'stamp', text: words.slice(0, 7).join(' '), stamp: /^зато/i.test(text) ? 'ПЛЮС' : 'МИНУС' }, mood: 'smug', hot: [] };
+  return { card: { kind: 'title', icon: ICONS[j % ICONS.length], text: head }, mood: ['happy', 'surprised', 'think', 'laugh'][j % 4], hot: [] };
+}
+
+// card styles: Gemini lays out the cards of many lines in one call, the code animates them
+async function cardVideo({ style, lang, lines, segs, words, duration, voiceTrack, short, W, H, fps, theme, plan, topic, useEleven, signal, step, wait, onScene }) {
+  const B = 14, batches = [];
+  for (let i = 0; i < lines.length; i += B) batches.push(lines.slice(i, i + B));
+  step('scenes', 0, lines.length, 'Gemini раскладывает карточки');
+  let done = 0;
+  const parts = await pool(batches, 3, async (b) => {
+    let cards = [];
+    for (const fast of [true, false]) {                                    // the fast model first, the main one if it fails
+      try { cards = (await AI.json(F.cardsPrompt({ style, lines: b, lang }), { fast, signal, onWait: wait })).cards || []; break; }
+      catch (e) { if (signal?.aborted) throw e; wait('Карточки: ' + e.message + (fast ? ' — пробую другую модель' : ' — собираю их из текста')); }
+    }
+    done += b.length; step('scenes', done, lines.length, `Карточки ${done} из ${lines.length}`);
+    return b.map((l, i) => (cards[i]?.card ? cards[i] : null));
+  });
+  const ofN = lines.filter((l) => ordinal(l.text)).length;
+  const cards = parts.flat().map((c, j) => c || localCard(lines[j].text, j, lines.length, ofN));
+  const timeline = lines.map((l, j) => ({ kind: 'card', theme, card: cards[j].card, mood: cards[j].mood, t0: segs[j].t0, t1: segs[j].t1, trans: j % 4 === 3 ? 'whip' : 'cut' }));
+  for (const it of timeline.slice(0, 6)) {                                 // real frames for the progress screen
+    const c = document.createElement('canvas'); c.width = Math.round(W / 4); c.height = Math.round(H / 4);
+    const x = c.getContext('2d'); x.scale(0.25, 0.25); drawCardShot(x, it, 1.6, it.t1 - it.t0, W, H, 0.3, it.t0 + 1.6); onScene?.(c);
+  }
+  // the paper style shows the words; the key words of each line get the accent pill
+  const norm = (w) => String(w).toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+  const capt = theme === 'paper' ? words.map((w) => ({ ...w, hot: (cards[w.j]?.hot || []).some((h) => String(h).split(/\s+/).map(norm).includes(norm(w.w))) })) : [];
+  const sfx = timeline.filter((x) => x.trans === 'whip').map((x) => [x.t1 - 0.3, A.whoosh()]);
+  const audio = A.mix(voiceTrack, { energetic: true, sfx });
+  const job = { W, H, fps, duration, timeline, words: capt, caption: theme, plates: [], audio, rate: A.RATE, env: A.envelope(voiceTrack, 50) };
+  return { job, plan, lines, script: lines.map((l) => l.text).join(' '), title: plan.title || topic, voice: useEleven ? 'ElevenLabs' : 'Gemini' };
 }
 
 // runs the montage worker; resolves with the MP4 bytes

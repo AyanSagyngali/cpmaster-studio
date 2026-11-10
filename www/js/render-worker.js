@@ -2,6 +2,7 @@
 // encoded by the phone's hardware H.264 encoder (WebCodecs) and muxed with the AAC/Opus sound into an MP4.
 import { Muxer, ArrayBufferTarget } from '../vendor/mp4-muxer.mjs';
 import { drawScene, drawTransition, drawPyramid, drawCollage, drawWord, drawPlate, drawTitle } from './anim.js';
+import { drawCardShot, drawCardWord } from './cards.js';
 
 let stop = false;
 // any crash inside the thread is reported with its real reason (the page only sees «error» otherwise)
@@ -76,7 +77,7 @@ async function render(job) {
     if (job.words?.length) {
       while (wi < job.words.length - 1 && t >= job.words[wi].t1) wi++;
       const w = job.words[wi];
-      if (w && t >= w.t0 && t < w.t1 + 0.15) drawWord(ctx, w.w, W, H, t - w.t0);
+      if (w && t >= w.t0 && t < w.t1 + 0.15) { if (job.caption) drawCardWord(ctx, w.w, W, H, t - w.t0, job.caption, w.hot); else drawWord(ctx, w.w, W, H, t - w.t0); }
     }
     for (const p of job.plates || []) if (t >= p.t0 && t < p.t1) drawPlate(ctx, p.text, W, H, t - p.t0);
 
@@ -100,6 +101,7 @@ async function render(job) {
 function drawItem(ctx, it, t, amp, W, H) {
   const lt = t - it.t0, dur = it.t1 - it.t0;
   if (it.kind === 'scene') drawScene(ctx, it.scene, lt, dur, W, H, amp);
+  else if (it.kind === 'card') drawCardShot(ctx, it, lt, dur, W, H, amp, t);
   else if (it.kind === 'pyramid') {                               // hold, fly into the card, then the live card itself
     const k = Math.max(0, Math.min(1, (lt - 0.5) / 1.2));
     if (lt < 1.7 || !it.scene) drawPyramid(ctx, it.cards, W, H, it.level, k, it.level, H > W);
