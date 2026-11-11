@@ -95,6 +95,12 @@ async function render(job) {
     }
     for (const p of job.plates || []) if (t >= p.t0 && t < p.t1) drawPlate(ctx, p.text, W, H, t - p.t0);
 
+    // the cover of the style is taken from the animation itself: 24 frames (12 per second) of the hook
+    const c0 = job.coverFrom ?? 0.4;
+    if (t >= c0 && t < c0 + 2 && f % Math.max(1, Math.round(fps / 12)) === 0) {
+      const cw = W >= H ? 480 : 270, ch = Math.round(cw * H / W), bmp = await createImageBitmap(canvas, { resizeWidth: cw, resizeHeight: ch, resizeQuality: 'medium' });
+      self.postMessage({ type: 'cover', bmp }, [bmp]);
+    }
     const frame = new VideoFrame(canvas, { timestamp: Math.round(t * 1e6), duration: Math.round(1e6 / fps) });
     venc.encode(frame, { keyFrame: f % (fps * 2) === 0 });
     frame.close();

@@ -277,29 +277,63 @@ class Actor {
   }
 }
 
-/* ---------------- one shot: actors move, the camera films ---------------- */
-// shot: {set, actors: [{id, x, z, face, pose, action, to: [x, z], talk, scale}], camera: {size, target, angle, move, side, roll, shake}, fx}
-const SIZE = { wide: 8.5, medium: 4.6, two: 5.6, close: 2.3, insert: 1.4, extreme: 0.95 };
-function actorAt(a, lt, dur, seed) {
-  const u = smooth(lt / Math.max(0.3, dur * (a.action === 'run' ? 0.6 : 0.85)));
-  const from = [+a.x || 0, +a.z || 0], to = Array.isArray(a.to) ? [+a.to[0] || 0, +a.to[1] || 0] : null;
-  const moving = to && (a.action === 'walk' || a.action === 'run');
-  const x = moving ? lerp(from[0], to[0], u) : from[0], z = moving ? lerp(from[1], to[1], u) : from[1];
-  let y = 0, roll = 0, bob = Math.sin(lt * 2.2 + seed) * 4;
-  const step = moving && u < 1 ? (lt * (a.action === 'run' ? 2.6 : 1.6)) % 1 : 0;
-  switch (a.action) {
-    case 'hop': case 'cheer': y = Math.abs(Math.sin(lt * 4.2 + seed)) * 0.35; break;
-    case 'jump': y = Math.max(0, Math.sin(clamp(lt / 0.8) * Math.PI)) * 1.1; break;
-    case 'dance': roll = Math.sin(lt * 5) * 0.14; y = Math.abs(Math.sin(lt * 5)) * 0.12; break;
-    case 'fall': roll = smooth(lt / 0.6) * 1.45 * (seed % 2 ? 1 : -1); break;
+/* ---------------- one shot: the director's rules in code ---------------- */
+// shot: {set, actors: [{id, x, z, y, face, pose, action, to: [x, z], talk}], camera: {size, target, angle, move, side, roll}, fx}
+const SIZE = { wide: 8.5, medium: 4.2, two: 5.2, close: 2.2, insert: 1.4, extreme: 1.1 };
+const STAND_ON = new Set(['podium', 'stairs', 'stage', 'platform', 'throne', 'well']);
+const STRIDE = { walk: 0.72, run: 1.35 };
+
+// blocking: where everyone really stands, worked out once per shot — nobody inside a wall, nobody inside another person,
+// and anyone standing over a podium / stairs / stage stands ON it
+function blocking(shot, solids) {
+  if (shot._blk) return shot._blk;
+  const people = (shot.actors || []).map((a) => ({ a, x: +a.x || 0, z: +a.z || 0, y: +a.y || 0, to: Array.isArray(a.to) ? [+a.to[0] || 0, +a.to[1] || 0] : null }));
+  const free = (p) => {
+    for (const s of solids) {
+      if (p.x < s.minX - 0.35 || p.x > s.maxX + 0.35 || p.z < s.minZ - 0.35 || p.z > s.maxZ + 0.35) continue;
+      if (STAND_ON.has(s.type) && s.top < 2.6) { if (p.x >= s.minX && p.x <= s.maxX && p.z >= s.minZ && p.z <= s.maxZ) p.y = Math.max(p.y, s.top); continue; }
+      if (s.top < 0.35) continue;                                           // tiny things (a ball, a paper) do not block
+      const out = [[s.minX - 0.45 - p.x, 0], [s.maxX + 0.45 - p.x, 0], [0, s.minZ - 0.45 - p.z], [0, s.maxZ + 0.45 - p.z]].sort((u, v) => Math.hypot(...u) - Math.hypot(...v))[0];
+      p.x += out[0]; p.z += out[1];
+    }
+  };
+  for (const p of people) free(p);
+  for (let it = 0; it < 6; it++) for (let i = 0; i < people.length; i++) for (let j = i + 1; j < people.length; j++) {   // personal space
+    const P = people[i], Q = people[j], dx = Q.x - P.x, dz = Q.z - P.z, d = Math.hypot(dx, dz);
+    if (d >= 0.95 || Math.abs(P.y - Q.y) > 0.5) continue;
+    const push = (0.95 - d) / 2 + 0.01, nx = d > 1e-3 ? dx / d : 1, nz = d > 1e-3 ? dz / d : 0;
+    P.x -= nx * push; P.z -= nz * push; Q.x += nx * push; Q.z += nz * push;
+  }
+  for (const p of people) { free(p); if (p.to) { const q = { x: p.to[0], z: p.to[1], y: p.y }; free(q); p.to = [q.x, q.z]; } }
+  return (shot._blk = people);
+}
+
+// motion of one person: steps follow the distance walked (feet never slide), jumps crouch first and land with a squash
+function actorAt(b, lt, dur, seed) {
+  const a = b.a, act = a.action || 'idle', moving = b.to && (act === 'walk' || act === 'run');
+  const len = moving ? Math.hypot(b.to[0] - b.x, b.to[1] - b.z) : 0;
+  const T2 = moving ? Math.min(dur * 0.9, len / (act === 'run' ? 3.2 : 1.3)) : 1, u = moving ? clamp(lt / Math.max(0.3, T2)) : 0, ue = moving ? smooth(u) : 0;
+  const x = moving ? lerp(b.x, b.to[0], ue) : b.x, z = moving ? lerp(b.z, b.to[1], ue) : b.z;
+  let y = b.y, roll = 0, bob = Math.sin(lt * 2.2 + seed) * 4, sy = 1 + Math.sin(lt * 2.2 + seed) * 0.008;   // breathing
+  const step = moving && u < 1 ? ((ue * len) / STRIDE[act]) % 1 : 0;
+  switch (act) {
+    case 'hop': case 'cheer': { const ph = (lt * 2.1 + seed * 0.1) % 1, air = Math.sin(ph * Math.PI); y += air * 0.32; sy = ph < 0.08 || ph > 0.92 ? 0.9 : 1 + air * 0.05; break; }
+    case 'jump': {
+      if (lt < 0.25) sy = 1 - smooth(lt / 0.25) * 0.14;                                   // anticipation: crouch
+      else if (lt < 1.05) { const k = (lt - 0.25) / 0.8; y += Math.sin(k * Math.PI) * 1.1; sy = 1.06; }
+      else if (lt < 1.25) sy = 1 - Math.sin(((lt - 1.05) / 0.2) * Math.PI) * 0.12;          // landing
+      break;
+    }
+    case 'dance': roll = Math.sin(lt * 5) * 0.14; y += Math.abs(Math.sin(lt * 5)) * 0.12; break;
+    case 'fall': roll = smooth(lt / 0.55) * 1.45 * (seed % 2 ? 1 : -1); if (lt > 0.55) sy = 1 - Math.max(0, Math.sin(((lt - 0.55) / 0.2) * Math.PI)) * 0.08; break;
     case 'shake': case 'scared': roll = Math.sin(lt * 40) * 0.03; break;
     case 'nod': bob = Math.sin(lt * 8) * 10; break;
-    case 'run': y = Math.abs(Math.sin(lt * 8)) * 0.08; break;
-    case 'walk': y = Math.abs(Math.sin(lt * 5)) * 0.04; break;
+    case 'run': y += Math.abs(Math.sin(step * Math.PI * 2)) * 0.07; break;
+    case 'walk': y += Math.abs(Math.sin(step * Math.PI * 2)) * 0.035; break;
     default:
   }
-  const dir = moving ? Math.sign(to[0] - from[0]) || 1 : a.face === 'left' ? -1 : 1;
-  return { x, y, z, roll, bob, step, dir };
+  const mv = moving ? [b.to[0] - b.x, b.to[1] - b.z] : null;
+  return { x, y, z, roll, bob, step, sy, mv };
 }
 
 export class World {
@@ -327,22 +361,51 @@ export class World {
     if (spec._group) return spec._group;
     const g = new T.Group(), first = ticks.length;
     const time = TIMES[spec.time] ? spec.time : spec.room ? 'interior' : 'day';
+    const r = rng(hashStr(spec.id || 'set'));
     if (spec.room) {
       const w = spec.room.w || 12, d = spec.room.d || 10, h = spec.room.h || 4.2, wall = spec.room.wall || '#e8d6b8', floor = spec.room.floor || '#a8784a';
+      spec._room = { w, d, h };
       const ft = paint(spec.room.floorKind || 'planks', floor).clone(); ft.needsUpdate = true; ft.repeat.set(w / 3, d / 3);
       add(g, new T.PlaneGeometry(w, d), floor, 0, 0, 0, { rx: -Math.PI / 2, map: ft, ink: false, shadow: false });
       const wt = paint(spec.room.wallKind || 'plaster', wall).clone(); wt.needsUpdate = true; wt.repeat.set(w / 4, h / 4);
       add(g, box(w, h, 0.2), wall, 0, h / 2, -d / 2, { map: wt, ink: false });
-      for (const s of [-1, 1]) add(g, box(0.2, h, d), shadeHex(wall, -0.06), s * w / 2, h / 2, 0, { map: wt, ink: false });
-      if (spec.room.window !== false) { add(g, box(2.6, 1.8, 0.25), '#5a3b2a', -w * 0.25, h * 0.6, -d / 2 + 0.05); add(g, new T.PlaneGeometry(2.3, 1.5), spec.room.outside === 'night' ? '#1d3a7a' : '#9fd3f2', -w * 0.25, h * 0.6, -d / 2 + 0.2, { ink: false, mat: new T.MeshBasicMaterial({ color: col(spec.room.outside === 'night' ? '#1d3a7a' : '#bfe4fa', '#bfe4fa') }) }); }
+      for (const sd of [-1, 1]) add(g, box(0.2, h, d), shadeHex(wall, -0.06), sd * w / 2, h / 2, 0, { map: wt, ink: false });
+      // dressing: skirting boards, a cornice, a rug, framed pictures, a window with daylight falling in
+      const trim = shadeHex(wall, -0.32);
+      add(g, box(w, 0.18, 0.06), trim, 0, 0.09, -d / 2 + 0.13, { ink: false }); for (const sd of [-1, 1]) add(g, box(0.06, 0.18, d), trim, sd * (w / 2 - 0.13), 0.09, 0, { ink: false });
+      add(g, box(w, 0.14, 0.12), shadeHex(wall, 0.08), 0, h - 0.07, -d / 2 + 0.16, { ink: false });
+      add(g, new T.CircleGeometry(2.2, 40), spec.room.rug || ['#8e3b3b', '#3f6a8f', '#6a5acd', '#a8784a'][(r() * 4) | 0], 0.3, 0.012, 0.2, { rx: -Math.PI / 2, ink: false, shadow: false }).scale.set(1.3, 1, 1);
+      for (const px of [w * 0.12, w * 0.34]) { add(g, box(1.1, 0.8, 0.06), '#5a3b2a', px, h * 0.6, -d / 2 + 0.14); add(g, new T.PlaneGeometry(0.9, 0.6), `hsl(${(r() * 360) | 0},40%,60%)`, px, h * 0.6, -d / 2 + 0.18, { ink: false, shadow: false }); }
+      if (spec.room.window !== false) {
+        const out = spec.room.outside === 'night' ? '#1d3a7a' : '#bfe4fa';
+        add(g, box(2.6, 1.8, 0.25), '#5a3b2a', -w * 0.25, h * 0.6, -d / 2 + 0.05); add(g, new T.PlaneGeometry(2.3, 1.5), out, -w * 0.25, h * 0.6, -d / 2 + 0.2, { ink: false, mat: new T.MeshBasicMaterial({ color: col(out, '#bfe4fa') }) });
+        add(g, box(0.08, 1.5, 0.08), '#5a3b2a', -w * 0.25, h * 0.6, -d / 2 + 0.22, { ink: false }); add(g, box(2.3, 0.08, 0.08), '#5a3b2a', -w * 0.25, h * 0.6, -d / 2 + 0.22, { ink: false });
+        if (spec.room.outside !== 'night') { const shaft = new T.Mesh(new T.PlaneGeometry(2.4, 5), new T.MeshBasicMaterial({ color: 0xfff2d0, transparent: true, opacity: 0.09, depthWrite: false, side: T.DoubleSide })); shaft.position.set(-w * 0.25 + 0.6, h * 0.35, -d / 2 + 1.9); shaft.rotation.set(-1.05, 0.25, 0); g.add(shaft); }
+      }
       const key = new T.PointLight(0xffe2b8, 9, 14, 2); key.position.set(1.5, h - 0.4, 1); g.add(key);
     } else {
       const kind = spec.ground || 'grass', base = { grass: '#6db04f', sand: '#e6c88a', snow: '#f2f5fa', dirt: '#a07850', stone: '#a8a294', road: '#666b74', water: '#3c8fd0', field: '#4f9a3f', moon: '#9a9aa6', wood: '#a8784a', tiles: '#d8d2c4' }[kind] || '#6db04f';
       const gt = paint(kind === 'field' ? 'grass' : kind, spec.groundColor || base).clone(); gt.needsUpdate = true; gt.repeat.set(30, 30);
       add(g, new T.PlaneGeometry(160, 160), spec.groundColor || base, 0, 0, 0, { rx: -Math.PI / 2, map: gt, ink: false, shadow: false });
       if (time !== 'space' && spec.horizon !== false) {                     // soft hills far away give depth
-        const r = rng(hashStr(spec.id)); for (let i = 0; i < 9; i++) { const a = (i / 9) * TAU + r() * 0.3, d = 55 + r() * 15; const hg = new T.Group(); KIT.hill(hg, { w: 14 + r() * 12, h: 5 + r() * 6, color: shadeHex(base, -0.05 + r() * 0.1) }); hg.position.set(Math.cos(a) * d, 0, Math.sin(a) * d); g.add(hg); }
+        for (let i = 0; i < 9; i++) { const a2 = (i / 9) * TAU + r() * 0.3, d = 55 + r() * 15; const hg = new T.Group(); KIT.hill(hg, { w: 14 + r() * 12, h: 5 + r() * 6, color: shadeHex(base, -0.05 + r() * 0.1) }); hg.position.set(Math.cos(a2) * d, 0, Math.sin(a2) * d); g.add(hg); }
       }
+      // life on the ground: tufts, flowers, pebbles around the stage (never on it), so no shot shows a bare floor
+      if (['grass', 'dirt', 'sand', 'snow', 'stone', 'moon'].includes(kind)) {
+        const tuft = kind === 'grass' ? '#4f9a3f' : kind === 'snow' ? '#dfe7f2' : kind === 'sand' ? '#c9a86a' : '#7d7568';
+        for (let i = 0; i < 70; i++) {
+          const a2 = r() * TAU, d = 3.6 + Math.pow(r(), 0.7) * 22, x = Math.cos(a2) * d, z = Math.sin(a2) * d * 0.8 - 2;
+          if (Math.abs(x) < 3.4 && z > -2.6 && z < 2.6) continue;
+          const pick = r();
+          if (pick < 0.55) add(g, cone(0.12 + r() * 0.1, 0.35 + r() * 0.3, 5), shadeHex(tuft, (r() - 0.5) * 0.1), x, 0.18, z, { ink: false });
+          else if (pick < 0.75 && kind === 'grass') { add(g, cyl(0.015, 0.015, 0.35, 4), '#3f7f3a', x, 0.17, z, { ink: false, shadow: false }); add(g, ball(0.08, 0), ['#e8435a', '#f6d55c', '#ffffff', '#b06ab3'][i % 4], x, 0.37, z, { ink: false, shadow: false }); }
+          else add(g, new T.DodecahedronGeometry(0.12 + r() * 0.2, 0), shadeHex('#8a8a92', (r() - 0.5) * 0.15), x, 0.08, z, { inkW: 0.015 });
+        }
+      }
+      // the sky has life too: clouds by day, a moon by night, a low sun at the golden hour
+      if (time === 'day' || time === 'golden' || time === 'storm') for (let i = 0; i < 5; i++) { const cg = new T.Group(); KIT.cloud(cg, { w: 2 + r() * 1.5, y: 0 }); cg.position.set(-60 + i * 30 + r() * 10, 26 + r() * 10, -70 - r() * 30); g.add(cg); }
+      if (time === 'night') { add(g, ball(4, 2), '#f5f1e1', 30, 42, -110, { emissive: '#f5f1e1', glow: 0.9, ink: false, shadow: false }); }
+      if (time === 'golden' || time === 'dusk') { add(g, ball(7, 2), time === 'golden' ? '#ffd08a' : '#ff9a7a', -45, 10, -120, { emissive: time === 'golden' ? '#ffb060' : '#ff7a5a', glow: 1.2, ink: false, shadow: false }); }
     }
     for (const o of spec.objects || []) {
       const og = new T.Group(); og.userData.spec = o;
@@ -351,6 +414,11 @@ export class World {
       g.add(og);
       for (const e of og.userData.extras || []) { const a = new Actor({ look: e.look }, hashStr(JSON.stringify(e.look))); a.draw({ face: e.face, pose: e.pose, t: 0 }); a.group.position.set(og.position.x + e.x, 0, og.position.z + e.z); a.group.userData.billboard = true; g.add(a.group); }
     }
+    // the solid footprint of every object: people walk around them, the camera never films from inside them
+    g.updateMatrixWorld(true);
+    spec._solids = g.children.filter((c) => c.userData.spec && !['field', 'road', 'water', 'paper', 'cloud', 'crowd', 'flowers'].includes(c.userData.spec.type)).map((c) => {
+      const bb = new T.Box3().setFromObject(c); return { type: c.userData.spec.type, id: c.userData.spec.id, minX: bb.min.x, maxX: bb.max.x, minZ: bb.min.z, maxZ: bb.max.z, top: bb.max.y, box: bb };
+    }).filter((s2) => Number.isFinite(s2.minX) && s2.maxX - s2.minX < 40);
     spec._ticks = ticks.splice(first); spec._time = time; spec._group = g; spec._sky = time === 'night' || time === 'space' ? starSky(TIMES[time]) : skyTexture(TIMES[time]);
     return g;
   }
@@ -368,46 +436,38 @@ export class World {
     for (const a of this.cast.values()) a.mat.color.set(L.tint);
     return spec;
   }
-  // where an actor / object / point is now (for the camera)
-  where(target, shot, lt, dur) {
+  // what the camera looks at: an actor, several actors, or an object that EXISTS in this set (else the main person)
+  where(target, shot, people, lt, dur) {
     if (Array.isArray(target)) return new T.Vector3(+target[0] || 0, +target[1] || 1, +target[2] || 0);
-    const ids = String(target || '').split(/[,+&]/).map((s) => s.trim()).filter(Boolean), pts = [];
+    const ids = String(target || '').split(/[,+&]/).map((x) => x.trim()).filter(Boolean), pts = [];
     for (const id of ids) {
-      const a = (shot.actors || []).find((x) => String(x.id) === id);
-      if (a) { const p = actorAt(a, lt, dur, 1); pts.push(new T.Vector3(p.x, 1.25 * (+a.scale || 1) + p.y + (+a.y || 0), p.z)); continue; }
-      const o = this.current?._group?.children.find((c) => c.userData.spec && (String(c.userData.spec.id) === id || c.userData.spec.type === id));
-      if (o) { const bb = new T.Box3().setFromObject(o); const c = bb.getCenter(new T.Vector3()); const sz = bb.getSize(new T.Vector3()); c.y = Math.min(c.y, bb.min.y + Math.max(1.2, sz.y * 0.6)); c.size = Math.min(30, Math.max(sz.x, sz.y * 1.2)); pts.push(c); }
+      const b = people.find((x) => String(x.a.id) === id);
+      if (b) { const p = actorAt(b, lt, dur, 1); pts.push(new T.Vector3(p.x, 1.25 * (+b.a.scale || 1) + p.y, p.z)); continue; }
+      const s2 = (this.current?._solids || []).find((x) => String(x.id) === id || x.type === id) || this.current?._group?.children.filter((c) => c.userData.spec && (String(c.userData.spec.id) === id || c.userData.spec.type === id)).map((c) => ({ box: new T.Box3().setFromObject(c) }))[0];
+      if (s2) { const bb = s2.box, c = bb.getCenter(new T.Vector3()), sz = bb.getSize(new T.Vector3()); c.y = Math.min(c.y, bb.min.y + Math.max(1.0, sz.y * 0.6)); c.size = Math.min(30, Math.max(sz.x, sz.z * 0.6, sz.y * 1.2)); pts.push(c); }
     }
-    if (!pts.length) { const a = (shot.actors || [])[0]; if (a) { const p = actorAt(a, lt, dur, 1); return new T.Vector3(p.x, 1.25, p.z); } return new T.Vector3(0, 1.2, 0); }
-    const c = pts.reduce((s, p) => s.add(p), new T.Vector3()).divideScalar(pts.length);
-    if (pts.length > 1) c.userData = { spread: Math.max(...pts.map((p) => p.distanceTo(c))) };
-    else if (pts[0].size) c.userData = { size: pts[0].size };
+    if (!pts.length) {                                                      // a missing target never gives an empty frame
+      const main = people.find((x) => x.a.talk) || people[0];
+      if (main) { const p = actorAt(main, lt, dur, 1); const v = new T.Vector3(p.x, 1.25 + p.y, p.z); v.fallback = true; return v; }
+      return new T.Vector3(0, 1.2, -2);
+    }
+    const c = pts.reduce((sum, q) => sum.add(q), new T.Vector3()).divideScalar(pts.length);
+    if (pts.length > 1) c.spread = Math.max(...pts.map((q) => q.distanceTo(c)));
+    else if (pts[0].size) c.size = pts[0].size;
     return c;
   }
   render(shot, lt, dur, t, amp, prevShot) {
     const spec = this.use(shot.set);
     if (!spec) return;
     for (const f of spec._ticks || []) f(t);
-    // actors of this shot
-    const present = new Set();
-    (shot.actors || []).forEach((a, i) => {
-      const actor = this.cast.get(String(a.id)); if (!actor) return;
-      present.add(actor);
-      if (actor.group.parent !== this.scene) this.scene.add(actor.group);
-      const p = actorAt(a, lt, dur, actor.seed + i);
-      const s = +a.scale || +actor.spec.scale || 1;
-      actor.group.position.set(p.x, p.y + (+a.y || 0), p.z); actor.group.scale.setScalar(s);
-      actor.mesh.rotation.z = p.roll; actor.mesh.scale.x = p.dir; actor.mesh.position.y = p.bob * 0.002;   // the idle bob moves the whole figure
-      const blink = ((t + actor.seed * 0.7) % 3.6) < 0.12;
-      actor.draw({ face: a.face || a.expr || 'neutral', pose: a.pose || 'hang', mouth: a.talk ? amp * 2.4 : 0, blink, step: p.step, bob: p.bob, t, lookX: a.look === 'left' ? -1 : a.look === 'right' ? 1 : 0 });
-      actor.shadow.scale.setScalar(1 - Math.min(0.6, p.y * 0.6));
-    });
-    for (const a of this.cast.values()) if (!present.has(a) && a.group.parent) this.scene.remove(a.group);
-    // the camera
+    const people = blocking(shot, spec._solids || []);
     const cam = shot.camera || {}, u = smooth(lt / Math.max(0.5, dur));
-    const tgt = this.where(cam.target, shot, lt, dur);
-    let dist = (SIZE[cam.size] || SIZE.medium) * (tgt.userData?.spread ? 1 + tgt.userData.spread * 0.35 : 1);
-    if (tgt.userData?.size) dist = Math.max(dist, tgt.userData.size * (this.H > this.W ? 1.9 : 1.15));   // a thing is filmed whole
+    // the camera first (the actors turn to it)
+    const tgt = this.where(cam.target, shot, people, lt, dur);
+    let size = cam.size; if (tgt.fallback && (size === 'insert' || size === 'extreme')) size = 'close';
+    let dist = SIZE[size] || SIZE.medium;
+    if (tgt.spread) dist *= 1 + tgt.spread * 0.35;
+    if (tgt.size) dist = Math.max(dist, tgt.size * (this.H > this.W ? 1.9 : 1.15));        // a thing is filmed whole
     let az = ((+cam.side || 0) * Math.PI) / 180, h = { eye: 0.1, low: -0.75, high: dist * 0.55, top: dist * 1.3 }[cam.angle] ?? 0.15;
     switch (cam.move) {
       case 'push': dist *= lerp(1.3, 1.0, u); break;
@@ -418,7 +478,20 @@ export class World {
       case 'drop': h += lerp(0, dist * 0.7, u); break;
       default: dist *= lerp(1.03, 0.97, u); az += Math.sin(t * 0.3) * 0.02;   // even a still shot breathes
     }
-    const pos = new T.Vector3(tgt.x + Math.sin(az) * dist, Math.max(0.25, tgt.y + h), tgt.z + Math.cos(az) * dist);
+    // wide and two-shots keep EVERY person of the shot in the frame
+    const right = new T.Vector3(Math.cos(az), 0, -Math.sin(az));
+    if (people.length > 1 && (size === 'wide' || size === 'two' || size === 'medium' && String(cam.target || '').includes(','))) {
+      const xs = people.map((b) => { const p = actorAt(b, lt, dur, 1); return (p.x - tgt.x) * right.x + (p.z - tgt.z) * right.z; });
+      const half = Math.max(...xs.map(Math.abs)) + 0.75, hfov = 2 * Math.atan(Math.tan((this.camera.fov * Math.PI) / 360) * this.camera.aspect);
+      dist = Math.max(dist, half / Math.tan(hfov / 2));
+    }
+    const pos = new T.Vector3(tgt.x + Math.sin(az) * dist, Math.max(0.3, tgt.y + h), tgt.z + Math.cos(az) * dist);
+    // never film from inside a wall or an object: stop in front of the first thing between the camera and the subject
+    if (spec._room) { const R = spec._room; pos.x = clamp(pos.x, -R.w / 2 + 0.5, R.w / 2 - 0.5); pos.z = Math.max(pos.z, -R.d / 2 + 0.6); pos.y = Math.min(pos.y, R.h - 0.3); }
+    const dir = pos.clone().sub(tgt), L2 = dir.length(); dir.normalize();
+    let block = L2;
+    for (const s2 of spec._solids || []) { if (s2.box.containsPoint(tgt)) continue; const hit = new T.Ray(tgt, dir).intersectBox(s2.box, new T.Vector3()); if (hit) { const d2 = hit.distanceTo(tgt); if (d2 > 0.6 && d2 < block) block = d2; } }
+    if (block < L2) pos.copy(tgt).addScaledVector(dir, Math.max(0.8, block - 0.35));
     // continuity: a shot in the same set glides in from where the last one ended
     if (prevShot && prevShot.set === shot.set && lt < 0.45 && prevShot._end) { const k = smooth(lt / 0.45); pos.lerp(prevShot._end.pos, 1 - k); tgt.lerp(prevShot._end.tgt, 1 - k); }
     this.camera.position.copy(pos); this.camera.lookAt(tgt);
@@ -426,8 +499,27 @@ export class World {
     this.camera.rotation.z += ((+cam.roll || 0) * Math.PI) / 180 * u + Math.sin(t * 47) * shake;
     if (shake) this.camera.position.y += Math.sin(t * 61) * shake;
     shot._end = { pos: pos.clone(), tgt: tgt.clone() };
-    // billboards face the camera
-    for (const a of present) a.mesh.rotation.y = Math.atan2(pos.x - a.group.position.x, pos.z - a.group.position.z);
+    const camRight = new T.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
+    // the actors: placed, moving the right way on screen, listening to whoever speaks
+    const present = new Set(), talker = people.find((b) => b.a.talk);
+    const talkerP = talker ? actorAt(talker, lt, dur, 1) : null;
+    people.forEach((b, i) => {
+      const a = b.a, actor = this.cast.get(String(a.id)); if (!actor) return;
+      present.add(actor);
+      if (actor.group.parent !== this.scene) this.scene.add(actor.group);
+      const p = actorAt(b, lt, dur, actor.seed + i), s3 = +a.scale || +actor.spec.scale || 1;
+      actor.group.position.set(p.x, p.y, p.z); actor.group.scale.setScalar(s3);
+      const facing = p.mv ? (p.mv[0] * camRight.x + p.mv[1] * camRight.z >= 0 ? 1 : -1) : a.face === 'left' ? -1 : 1;
+      actor.mesh.rotation.z = p.roll; actor.mesh.scale.set(facing, p.sy, 1); actor.mesh.position.y = p.bob * 0.002;
+      let lookX = a.look === 'left' ? -1 : a.look === 'right' ? 1 : 0;
+      if (talker && talker !== b && talkerP) lookX = Math.sign((talkerP.x - p.x) * camRight.x + (talkerP.z - p.z) * camRight.z) * facing;
+      const blink = ((t + actor.seed * 0.7) % 3.6) < 0.12;
+      actor.draw({ face: a.face || a.expr || 'neutral', pose: a.pose || 'hang', mouth: a.talk ? amp * 2.4 : 0, blink, step: p.step, t, lookX });
+      actor.shadow.scale.setScalar(1 - Math.min(0.6, (p.y - b.y) * 0.6));
+      actor.shadow.position.y = 0.012 - (p.y - b.y) / s3;
+      actor.mesh.rotation.y = Math.atan2(pos.x - p.x, pos.z - p.z);          // cards face the camera
+    });
+    for (const a of this.cast.values()) if (!present.has(a) && a.group.parent) this.scene.remove(a.group);
     spec._group.traverse((o) => { if (o.userData.billboard) { const wp = o.getWorldPosition(new T.Vector3()); o.rotation.y = Math.atan2(pos.x - wp.x, pos.z - wp.z); } });
     this.sun.target.position.copy(tgt); this.sun.position.copy(tgt).add(new T.Vector3(...TIMES[spec._time].sun[2]));
     this.renderer.render(this.scene, this.camera);

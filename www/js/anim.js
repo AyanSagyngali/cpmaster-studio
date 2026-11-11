@@ -440,6 +440,14 @@ export function prepareScene(sc, dur) {
   return sc;
 }
 
+// the What If look (same as its cover): black silhouettes outlined by the warm key light
+function person(ctx, sc, st, t, amp, k) {
+  if (!sc.silhouette) return drawFigure(ctx, st, t, amp);
+  ctx.save(); ctx.shadowColor = sc.rim || '#f2a541'; ctx.shadowBlur = 16 * k;
+  drawFigure(ctx, { ...st, silhouette: true }, t, amp);
+  ctx.restore();
+}
+
 export function drawScene(ctx, sc, t, dur, W, H, amp = 0) {
   prepareScene(sc, dur);
   // Gemini places everything in the real frame (W x H); only the figure size follows the short side (scale 1 = 232 px at 720)
@@ -468,9 +476,9 @@ export function drawScene(ctx, sc, t, dur, W, H, amp = 0) {
     if (it.an) {
       const seat = drawAnimal(ctx, it.an.an, it.an.st, t);
       const idx = animals.indexOf(it.an);
-      for (const r of actors.filter((a) => a.rider === idx)) drawFigure(ctx, { ...r, x: seat[0], y: seat[1], facing: it.an.st.facing, pose: ACTIONS.ride(t), seat: true }, t, amp);
+      for (const r of actors.filter((a) => a.rider === idx)) person(ctx, sc, { ...r, x: seat[0], y: seat[1], facing: it.an.st.facing, pose: ACTIONS.ride(t), seat: true }, t, amp, k);
     } else {
-      drawFigure(ctx, it.a, t, amp);
+      person(ctx, sc, it.a, t, amp, k);
       if (it.a.moving && it.a.act === 'run') drawFx(ctx, { kind: 'dust', x: it.a.x - 30 * it.a.facing * it.a.scale, y: it.a.y, scale: it.a.scale * 0.7, dir: -it.a.facing }, t, W, H, 7);
     }
   }

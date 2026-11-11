@@ -176,7 +176,8 @@ async function start() {
     // Android takes the video encoder away from an app that is not on screen: an interrupted montage waits for the user to come back and runs again
     let mp4;
     for (let attempt = 1; ; attempt++) {
-      try { mp4 = await montage(r.job, { signal: ctl.signal, onProgress: (p) => { job.frame = p.frame; job.total = p.total; job.fps = p.fps; job.eta = p.eta; if (p.preview) job.preview = p.preview; upd(); } }); break; }
+      coverFrames.length = 0;
+      try { mp4 = await montage(r.job, { signal: ctl.signal, onCover: (b) => coverFrames.push(b), onProgress: (p) => { job.frame = p.frame; job.total = p.total; job.fps = p.fps; job.eta = p.eta; if (p.preview) job.preview = p.preview; upd(); } }); break; }
       catch (e) {
         if (ctl.signal.aborted || attempt >= 4) throw e;
         job.log.push(`Монтаж прервался (${e.message}). ${document.hidden ? 'Продолжу, когда вернёшься в приложение' : 'Повторяю'}`);
@@ -186,6 +187,7 @@ async function start() {
       }
     }
     job.text = 'Сохраняю'; upd();
+    saveCover(r.style || st.style, coverFrames).catch(() => {});        // the style's cover = a real piece of this video
     // the finished video is never lost: phone file first, the app's own storage if that fails, and it plays from memory right away
     const id = uid();
     let ref;
@@ -215,6 +217,13 @@ async function start() {
     $('#cp').onclick = async () => { try { await navigator.clipboard.writeText(info); toast('Скопировано'); } catch { toast('Выдели текст и скопируй'); } };
     $('#again').onclick = () => home();
   } finally { try { await lock?.release(); } catch { /* ok */ } }
+}
+const coverFrames = [];
+async function saveCover(style, frames) {
+  if (frames.length < 6) return;
+  const out = [];
+  for (const b of frames) { const c = new OffscreenCanvas(b.width, b.height); c.getContext('2d').drawImage(b, 0, 0); out.push(await c.convertToBlob({ type: 'image/jpeg', quality: 0.82 })); b.close?.(); }
+  const { blobs } = await import('./store.js'); await blobs.put('cover:' + style, out);
 }
 async function thumbData(b) {
   const c = document.createElement('canvas'); c.width = 160; c.height = Math.round(160 * b.height / b.width);

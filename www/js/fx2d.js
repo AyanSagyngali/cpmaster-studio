@@ -10,27 +10,16 @@ const EMO = (px) => `${Math.round(px)}px "Apple Color Emoji", "Segoe UI Emoji", 
 /* ---------------- Shorts captions ---------------- */
 // words: [{j (line), t0, t1, w}]; the group is the 1–3 words around the spoken one, never across two lines
 export function drawShortsCaption(ctx, words, wi, t, W, H) {
-  const w = words[wi]; if (!w || t < w.t0 - 0.05 || t > w.t1 + 0.35) return;
-  let g0 = wi - (wi % 3);                                                  // fixed groups of three inside a line
-  while (g0 > 0 && words[g0 - 1]?.j === w.j && (wi - g0) >= 3) g0++;
-  const grp = []; for (let i = g0; i < Math.min(words.length, g0 + 3); i++) if (words[i].j === w.j) grp.push(i);
-  if (!grp.includes(wi)) grp.splice(0, grp.length, wi);
-  const k = Math.min(W, H) / 1080, px = 78 * k, y = H > W ? H * 0.69 : H * 0.84;
-  ctx.save(); ctx.font = FONT(px); ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
-  const texts = grp.map((i) => String(words[i].w).toUpperCase()), gapW = px * 0.3;
-  // the spoken word is drawn 12 % bigger, so its slot is 12 % wider: words never touch
-  const widths = texts.map((s, n) => ctx.measureText(s).width * (grp[n] === wi ? 1.12 : 1));
-  const total = widths.reduce((a, b) => a + b, 0) + gapW * (texts.length - 1);
-  const scale = Math.min(1, (W * 0.88) / total);
-  ctx.translate(W / 2, y); ctx.scale(scale, scale);
-  let x = -total / 2;
-  texts.forEach((s, n) => {
-    const i = grp[n], on = i === wi, u = on ? back((t - words[i].t0) / 0.16) : 1, sz = on ? 1.12 : 1;
-    ctx.save(); ctx.translate(x + widths[n] / 2, 0); ctx.scale(sz * (on ? 0.85 + 0.15 * u : 1), sz * (on ? 0.85 + 0.15 * u : 1));
-    ctx.lineWidth = px * 0.2; ctx.strokeStyle = '#111'; ctx.textAlign = 'center'; ctx.strokeText(s, 0, 0);
-    ctx.fillStyle = on ? '#ffd23f' : '#ffffff'; ctx.fillText(s, 0, 0); ctx.restore();
-    x += widths[n] + gapW;
-  });
+  // ONE word at a time, exactly while it is spoken: big, white with a black outline, popping in; long or number words in yellow
+  const w = words[wi]; if (!w || t < w.t0 - 0.02 || t > w.t1 + 0.12) return;
+  const k = Math.min(W, H) / 1080, y = H > W ? H * 0.68 : H * 0.84, word = String(w.w).replace(/[.,!?;:…]+$/, '').toUpperCase();
+  if (!word) return;
+  const u = back((t - w.t0) / 0.12), hot = /\d/.test(word) || word.length >= 8;
+  ctx.save(); ctx.font = FONT(104 * k); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+  const s2 = Math.min(1, (W * 0.9) / Math.max(1, ctx.measureText(word).width)) * (0.82 + 0.18 * u);
+  ctx.translate(W / 2, y); ctx.scale(s2, s2);
+  ctx.lineWidth = 22 * k; ctx.strokeStyle = '#111'; ctx.strokeText(word, 0, 0);
+  ctx.fillStyle = hot ? '#ffd23f' : '#ffffff'; ctx.fillText(word, 0, 0);
   ctx.restore();
 }
 

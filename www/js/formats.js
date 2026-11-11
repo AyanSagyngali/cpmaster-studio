@@ -52,6 +52,8 @@ ${FACTS} At least five real facts per video.`,
   mult: `You are the head writer of a viral animated cartoon-story channel (YouTube Shorts / TikTok). Every video is ONE surprising story with a physical cause and effect you can SHOW, a clear everyman character, stakes that escalate, and an ironic twist in the last line. It fits any topic: history, science, sport, money, "what if", fairy tales, kids' stories, weird laws, lucky accidents.
 FORMULA: 1 HOOK — sentence one, no setup: the absurd fact or paradox stated as fact ("A man sold the Eiffel Tower. Then he sold it again.") → 2 SETTING in 1–2 lines: when, where, who, one concrete detail → 3 ESCALATION in 2–4 beats, each bigger; others doubt or mock; one exaggeration joke → 4 PIVOT: "But when…" / "You see," — the real mechanism, often with an everyday analogy → 5 TWIST / PAYOFF: short, ironic, the last words of the video.
 VOICE: plain spoken language like a smart friend telling a story, contractions, sentences of 8–15 words mixed with 3-word punches, a pause (…) before the reveal; never describe what the viewer already sees; every sentence must be something we can animate (a place, an action, an object, a reaction). Props carry the jokes.
+STAY ON THE OWNER'S TOPIC AND PREMISE: if the topic is "what if I / you …", the viewer is the hero and the whole video is that story happening to them (not a list of trivia about the subject). One chain of events from the first line to the last: every line follows from the previous one with "but" or "so / therefore", never "and then"; every line is ONE visible action or reaction in a concrete place.
+EXACT FACTS: say things precisely ("eighteen-carat gold", not "pure gold"); a striking fact appears only if you are sure; no invented names, words or nonsense.
 For a long video: chain 4–8 such stories or chapters of one story; every chapter ends on a small twist that pulls into the next; the last chapter ends on the big payoff and a question to the viewer.
 ${FACTS}`,
 
@@ -105,7 +107,7 @@ ${masterOf(style)}
 Topic: ${topic}. ${short ? 'This is a Short: every second counts.' : 'This is one chapter of a long video.'}
 THE DRAFT (${lines.length} lines):
 ${lines.map((l, i) => `${i + 1}. ${l.text}`).join('\n')}
-Rewrite it ${LANG[lang]} so it is gripping and follows the structure: sharpen the hook, replace every vague line with a specific fact, image or action, cut filler, fix rhythm, keep facts true. Keep EXACTLY ${lines.length} lines and roughly the same length of each line. Keep each line's "idea" (English, what we see), make it literal and concrete.
+First check it: every fact true and precise (remove or soften anything doubtful), no nonsense words, the topic and premise of the owner kept, every line follows from the previous one ("but" / "so"), every line is something we can SEE. Then rewrite it ${LANG[lang]} so it is gripping and follows the structure: sharpen the hook, replace every vague line with a specific fact, image or action, cut filler, fix rhythm, keep facts true. Keep EXACTLY ${lines.length} lines and roughly the same length of each line. Keep each line's "idea" (English, what we see), make it literal and concrete.
 ${CHECK(short)}
 Return JSON {"lines": [{"text": str, "idea": str}]}.${lessonsBlock(lessons)}`;
 }

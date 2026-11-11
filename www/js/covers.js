@@ -76,20 +76,32 @@ const CARD_DEMO = {
   mascot: [{ kind: 'step', n: 1, of: 4, icon: '🎙️', title: 'Голос', stat: '★ 46 195' }, { kind: 'list', items: [{ icon: '✅', text: 'Бесплатно', mark: 'check' }, { icon: '📱', text: 'На телефоне', mark: 'check' }, { icon: '💸', text: 'Подписка', mark: 'cross' }] }, { kind: 'number', label: 'За год', value: '23880', suffix: ' ₽' }],
 };
 
-// start a live cover on a canvas; returns stop()
+// start a live cover on a canvas; returns stop().
+// First choice: the real animation — 24 frames of the hook of the last video made in this style (saved by the montage).
+// Until there is one, the same engine that makes the videos draws a sample of the style.
 export function cover(canvas, style) {
   const ctx = canvas.getContext('2d'), W = canvas.width, H = canvas.height; let raf = 0, alive = true; const t0 = performance.now();
   const loop = (fn) => { const f = (now) => { if (!alive) return; fn(Math.max(0, (now - t0) / 1000)); raf = requestAnimationFrame(f); }; raf = requestAnimationFrame(f); };
+  const fit = (img) => { const s2 = Math.max(W / img.width, H / img.height), w = img.width * s2, h = img.height * s2; ctx.drawImage(img, (W - w) / 2, (H - h) / 2, w, h); };
+  let real = false;
+  import('./store.js').then(({ blobs }) => blobs.get('cover:' + style)).then(async (list) => {
+    if (!alive || !Array.isArray(list) || list.length < 6) return;
+    const frames = await Promise.all(list.map((b) => createImageBitmap(b)));
+    if (!alive) return;
+    real = true; cancelAnimationFrame(raf);
+    loop((t) => { const n = frames.length, i = Math.floor(t * 12) % (n * 2 - 2); fit(frames[i < n ? i : n * 2 - 2 - i]); });   // ping-pong: a seamless loop
+  }).catch(() => {});
+  const sample = (fn) => loop((t) => { if (!real) fn(t); });
   if (style === 'mult') {
     ctx.fillStyle = '#0b1430'; ctx.fillRect(0, 0, W, H);
-    multFlipbook(W, H).then((fr) => loop((t) => ctx.drawImage(fr[Math.floor(t * 12) % fr.length], 0, 0, W, H))).catch(() => loop((t) => drawWhatIf(ctx, t, W, H)));
-  } else if (style === 'razgon') loop((t) => drawWhatIf(ctx, t, W, H));
-  else if (style === 'istorik') loop((t) => drawIstorik(ctx, t, W, H));
+    multFlipbook(W, H).then((fr) => { if (!real) sample((t) => ctx.drawImage(fr[Math.floor(t * 12) % fr.length], 0, 0, W, H)); }).catch(() => {});
+  } else if (style === 'razgon') sample((t) => drawWhatIf(ctx, t, W, H));
+  else if (style === 'istorik') sample((t) => drawIstorik(ctx, t, W, H));
   else if (style === 'paper' || style === 'mascot') {
     const demo = CARD_DEMO[style];
-    loop((t) => { const i = Math.floor(t / 3) % demo.length; ctx.setTransform(W / 720, 0, 0, H / 900, 0, 0); drawCardShot(ctx, { theme: style, card: demo[i], mood: ['surprised', 'happy', 'smug'][i] }, t % 3, 3, 720, 900, 0.25 + 0.25 * Math.sin(t * 9), t); ctx.setTransform(1, 0, 0, 1, 0, 0); });
+    sample((t) => { const i = Math.floor(t / 3) % demo.length; ctx.setTransform(W / 720, 0, 0, H / 900, 0, 0); drawCardShot(ctx, { theme: style, card: demo[i], mood: ['surprised', 'happy', 'smug'][i] }, t % 3, 3, 720, 900, 0.25 + 0.25 * Math.sin(t * 9), t); ctx.setTransform(1, 0, 0, 1, 0, 0); });
   } else {                                                                   // Auto: the looks in turn behind a turning die
-    loop((t) => {
+    sample((t) => {
       const k = Math.floor(t / 2.5) % 3;
       if (k === 0) drawWhatIf(ctx, t, W, H); else if (k === 1) drawIstorik(ctx, t, W, H); else { ctx.setTransform(W / 720, 0, 0, H / 900, 0, 0); drawCardShot(ctx, { theme: 'paper', card: CARD_DEMO.paper[0] }, t % 2.5, 2.5, 720, 900, 0.2, t); ctx.setTransform(1, 0, 0, 1, 0, 0); }
       ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(0, 0, W, H);

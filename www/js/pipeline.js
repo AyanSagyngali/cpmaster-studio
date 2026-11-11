@@ -7,7 +7,7 @@ import * as A from './audio.js';
 import * as F from './formats.js';
 import { makeScene, heroParts, PALETTE } from './scene.js';
 import { drawCardShot } from './cards.js';
-import { biblePrompt, tidyBible } from './bible.js';
+import { castSetsPrompt, beatsPrompt, tidyCastSets, tidyBeats } from './bible.js';
 import { blobs } from './store.js';
 
 /* ---------------- the sound library: real effects made once by ElevenLabs, kept on the phone, reused ---------------- */
@@ -19,12 +19,14 @@ async function shotSound(sfx, budget, { signal, wait }) {
     const b = await blobs.get(key);
     if (b) { budget.reused++; return await A.decode(b instanceof Uint8Array ? b : new Uint8Array(await b.arrayBuffer())); }
   } catch { /* not in the library */ }
-  if (sfx.prompt && budget.made < budget.max && EL.left() - EL.SFX_COST(2) >= budget.reserve) {
+  // the place is taken BEFORE the request (requests run in parallel), and given back if it fails
+  if (sfx.prompt && budget.made < budget.max && EL.left() - EL.SFX_COST(2) * (budget.made + 1) >= budget.reserve) {
+    budget.made++;
     try {
       const bytes = await EL.soundFx(sfx.prompt, 2, { signal });
-      budget.made++; blobs.put(key, bytes).catch(() => {});
+      blobs.put(key, bytes).catch(() => {});
       return await A.decode(bytes);
-    } catch (e) { if (signal?.aborted) throw e; wait(`Звук «${sfx.prompt}»: ${e.message} — беру синтез`); }
+    } catch (e) { budget.made--; if (signal?.aborted) throw e; wait(`Звук «${sfx.prompt}»: ${e.message} — беру синтез`); }
   }
   return A.SFX[sfx.kind]?.() || null;
 }
@@ -166,6 +168,8 @@ export async function make({ style, topic, kind, minutes = 10, lang = 'ru', voic
   });
   for (let j = 0; j < scenes.length; j++) if (!scenes[j]) scenes[j] = scenes[j - 1] || scenes.find(Boolean);
   if (!scenes.some(Boolean)) throw new Error('Gemini не смог нарисовать ни одной сцены');
+  // What If keeps the look of its cover in every shot: dusk light, rim-lit silhouettes, dust in the beam
+  if (style === 'razgon') for (const sc of scenes) if (sc) { sc.silhouette = true; if (!sc.light || sc.light.time === 'day') sc.light = { ...(sc.light || {}), time: 'dusk', x: sc.light?.x ?? W * 0.7, y: sc.light?.y ?? H * 0.3 }; sc.ambient = [...new Set([...(sc.ambient || []), 'motes'])].slice(0, 3); }
   const kinds = ['cut', 'cut', 'cut', 'whip', 'cut', 'flash'];
   const timeline = lines.map((l, j) => ({ kind: 'scene', t0: segs[j].t0, t1: segs[j].t1, scene: scenes[j], trans: kinds[j % kinds.length] }));
   const sfx = timeline.filter((x) => x.trans === 'whip').map((x) => [x.t1 - 0.3, A.whoosh()]).concat(timeline.filter((x) => x.trans === 'flash').map((x) => [x.t1 - 0.2, A.boom()]));
@@ -176,25 +180,46 @@ export async function make({ style, topic, kind, minutes = 10, lang = 'ru', voic
 
 /* ---------------- the 3D cartoon: a production bible, stills, sound on the beats ---------------- */
 async function worldVideo({ style, pack, lang, lines, segs, words, duration, voiceTrack, W, H, fps, plan, topic, useEleven, signal, step, wait, onScene }) {
-  step('scenes', 0, lines.length, 'Режиссёр Gemini придумывает героев, места и кадры');
-  // long videos: the cast and sets are designed with the first chapter, later chapters reuse them
-  const B = 16, batches = [];
-  for (let i = 0; i < lines.length; i += B) batches.push(lines.slice(i, i + B));
-  let bible = null, done = 0;
-  for (const b of batches) {
+  // 1) the whole script once: the cast and the places
+  step('scenes', 0, lines.length, 'Режиссёр читает весь сценарий: герои и места');
+  let cs = null;
+  for (const fast of [false, true]) {
+    try { cs = await AI.json(castSetsPrompt({ topic, lines, lang }), { fast, signal, onWait: wait, think: 'low' }); break; }
+    catch (e) { if (signal?.aborted) throw e; wait(`Режиссёр: ${e.message}${fast ? '' : ' — пробую быструю модель'}`); }
+  }
+  const bible = tidyCastSets(cs);
+  const castIds = bible.cast.map((c) => c.id), setIds = bible.sets.map((x) => x.id);
+  wait(`Герои: ${bible.cast.map((c) => c.name || c.id).join(', ')} · места: ${bible.sets.map((x) => x.name || x.id).join(', ')}`);
+  // 2) then in order, three lines at a time, knowing the story so far and the next line: beats on exact words
+  const perLine = [];
+  let story = '', prevBeat = null;
+  for (let i = 0; i < lines.length; i += 3) {
+    const chunk = lines.slice(i, i + 3).map((l, k) => ({ i: i + k, text: l.text }));
     let raw = null;
     for (const fast of [false, true]) {
-      try { raw = await AI.json(biblePrompt({ topic, lines: b, lang, known: bible ? { cast: bible.cast.map((c) => c.id), sets: bible.sets.map((s) => s.id) } : null }), { fast, signal, onWait: wait, think: 'low' }); break; }
-      catch (e) { if (signal?.aborted) throw e; wait(`Режиссёр: ${e.message}${fast ? '' : ' — пробую быструю модель'}`); }
+      try { raw = await AI.json(beatsPrompt({ topic, lines: chunk, cast: bible.cast, sets: bible.sets, story, next: lines[i + 3]?.text || '', total: lines.length }), { fast, signal, onWait: wait, think: 'low' }); break; }
+      catch (e) { if (signal?.aborted) throw e; wait(`Кадры ${i + 1}–${i + chunk.length}: ${e.message}${fast ? '' : ' — пробую быструю модель'}`); }
     }
-    const part = tidyBible(bible ? { cast: [...bible.cast, ...(raw?.cast || [])], sets: [...bible.sets, ...(raw?.sets || [])], shots: raw?.shots } : raw, b);
-    if (!bible) bible = part;
-    else { const ids = new Set(bible.cast.map((c) => c.id)); bible.cast.push(...part.cast.filter((c) => !ids.has(c.id))); const sids = new Set(bible.sets.map((s) => s.id)); bible.sets.push(...part.sets.filter((s) => !sids.has(s.id))); bible.shots.push(...part.shots); }
-    done += b.length; step('scenes', done, lines.length, `План кадров: ${done} из ${lines.length}`);
+    const r = tidyBeats(raw, chunk, castIds, setIds, prevBeat);
+    perLine.push(...r.beats); prevBeat = r.beats.at(-1)?.at(-1) || prevBeat;
+    story = r.story || `${story} ${chunk.map((l) => l.text).join(' ')}`.slice(-400);
+    step('scenes', Math.min(lines.length, i + 3), lines.length, `Кадры по порядку: ${Math.min(lines.length, i + 3)} из ${lines.length}`);
   }
-  wait(`Герои: ${bible.cast.map((c) => c.name || c.id).join(', ')} · места: ${bible.sets.length}`);
-  // timeline: a cut inside one place, a short white flash on a jump in place or time
-  const timeline = lines.map((l, j) => ({ kind: 'world', shot: bible.shots[j], t0: segs[j].t0, t1: segs[j].t1, trans: j < lines.length - 1 && bible.shots[j + 1].set !== bible.shots[j].set ? 'flash' : 'cut' }));
+  // every beat starts when its word is spoken (searched forward inside its line), so the picture never lags behind the voice
+  const timeline = [];
+  perLine.forEach((beats, j) => {
+    const seg = segs[j], ws = words.filter((w) => w.j === j);
+    let from = 0;
+    const starts = beats.map((bt, k) => {
+      if (!k || !bt.at) return seg.t0;
+      const target = normWord(bt.at), idx = ws.findIndex((w, n) => n >= from && (normWord(w.w) === target || (target.length > 4 && normWord(w.w).startsWith(target.slice(0, 5)))));
+      if (idx < 0) return null;
+      from = idx + 1; return Math.max(seg.t0, ws[idx].t0 - 0.06);
+    });
+    const kept = beats.map((bt, k) => [bt, starts[k]]).filter(([, t0]) => t0 != null && t0 < seg.t1 - 0.4);
+    kept.forEach(([bt, t0], k) => timeline.push({ kind: 'world', j, shot: { ...bt, line: j + 1 }, t0, t1: k < kept.length - 1 ? kept[k + 1][1] : seg.t1 }));
+  });
+  timeline.forEach((it, n) => { it.trans = n < timeline.length - 1 && timeline[n + 1].shot.set !== it.shot.set ? 'flash' : 'cut'; });
   // stills before the long render (the look check), shown on the progress screen
   try {
     const { World } = await import('./world3d.js');
@@ -210,10 +235,10 @@ async function worldVideo({ style, pack, lang, lines, segs, words, duration, voi
   // sound on the beats: every effect lands on its word; real sounds from the library or ElevenLabs, synth as the last resort;
   // the voice keeps its reserve of credits (it is always more important than effects); the twist's sting stops the music
   step('scenes', lines.length, lines.length, 'Звукорежиссёр подбирает эффекты');
-  const budget = { made: 0, reused: 0, max: lines.length > 20 ? 24 : 8, reserve: 2500 };
+  const budget = { made: 0, reused: 0, max: lines.length > 20 ? 24 : 10, reserve: 2500 };
   const sfx = [];
   let stopAt = null;
-  const sounds = await pool(timeline, 3, (it, j) => shotSound(it.shot.sfx, budget, { signal, wait }).then((pcm) => [soundTime(it.shot.sfx, j, words, it), pcm]));
+  const sounds = await pool(timeline, 3, (it) => shotSound(it.shot.sfx, budget, { signal, wait }).then((pcm) => [soundTime(it.shot.sfx, it.j, words, it), pcm]));
   for (const [t, pcm] of sounds) if (pcm) sfx.push([t, pcm]);
   timeline.forEach((it) => { if (it.shot.sfx?.kind === 'sting' && it.t0 > duration * 0.5) stopAt = it.t0; if (it.trans === 'flash') sfx.push([it.t1 - 0.25, A.whoosh(0.5)]); });
   wait(`Звуки: ${budget.made} новых от ElevenLabs, ${budget.reused} из библиотеки`);
@@ -279,7 +304,7 @@ async function cardVideo({ style, pack, lang, lines, segs, words, duration, voic
 }
 
 // runs the montage worker; resolves with the MP4 bytes
-export function montage(job, { signal, onProgress } = {}) {
+export function montage(job, { signal, onProgress, onCover } = {}) {
   return new Promise((ok, bad) => {
     const w = new Worker(new URL('./render-worker.js', import.meta.url), { type: 'module' });
     // nothing is transferred: the page keeps its own scenes and sound, so an interrupted montage can simply run again
@@ -287,6 +312,7 @@ export function montage(job, { signal, onProgress } = {}) {
     w.onmessage = (e) => {
       const m = e.data;
       if (m.type === 'progress') onProgress?.(m);
+      else if (m.type === 'cover') onCover?.(m.bmp);
       else if (m.type === 'done') { w.terminate(); ok(new Uint8Array(m.buffer)); }
       else if (m.type === 'error') { w.terminate(); bad(new Error(m.message)); }
     };
