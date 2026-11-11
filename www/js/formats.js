@@ -2,11 +2,14 @@
 //  istorik — the AE.LAH channel «Историк»: history, «ты» as the hero, warm doodle stick figures, real facts
 //  razgon  — «What if…»: one human ability pushed to the extreme, a mini-film in the second person, real science
 // The owner's lessons (chat + ratings) are added to every prompt.
+import { ILLUS_ABOUT } from './illus.js';
 
 export const STYLES = {
   istorik: { name: 'Историк', about: 'История: ты проживаешь эпоху как герой. Тёплые рисованные стикмены, живые сцены, реальные факты.' },
   razgon: { name: 'What If', about: 'Что если бы твоё тело или мозг работали иначе? Мини-фильм от второго лица на настоящей науке.' },
   paper: { name: 'Бумага', about: 'Объяснялка: тёплые карточки с цифрами и списками, слова на экране, маленький маскот.', engine: 'cards', theme: 'paper' },
+  film: { name: 'Сказка / Кино', about: 'Живые иллюстрированные сцены кодом: сказки на ночь, детские истории, кино-короткометражки.', engine: 'cards', theme: 'film' },
+  auto: { name: 'Авто', about: 'ИИ сам выберет стиль под твою тему.' },
   mascot: { name: 'Маскот', about: 'Подборки и сравнения: тёмные инфокарточки, отсчёт цифр, галочки и живой персонаж.', engine: 'cards', theme: 'mascot' },
 };
 
@@ -24,6 +27,7 @@ const LANG = { ru: 'на русском языке', en: 'in English' };
 const per = (words, n) => Math.max(8, Math.round(words / n));
 
 const VOICE_RULES = {
+  film: `Голос — тёплый рассказчик-сказочник (сказка на ночь, детская история или кинематографичная короткометражка — по теме): спокойно, образно, на «ты» к слушателю или от третьего лица. Каждая фраза — одна картинка, которую можно увидеть: свет луны на воде, рыбка под листом, луч маяка в тумане. Настоящая история: герой → чего он хочет → препятствие → поворот → тёплая развязка → короткая мысль, с которой хорошо засыпать или о которой хочется подумать. Для детей — простые слова, повторы-рефрены, доброта, без страшного.`,
   paper: `Голос — умный и тёплый блогер-объяснялка из TikTok: говорит просто о сложном, на «ты», с лёгкой иронией. Структура: крючок с цифрой или парадоксом → «вот как это работает» по шагам → неожиданный вывод → призыв: «напиши в комментах слово …». Каждая фраза — одна мысль, которую можно показать карточкой (цифра, список, сравнение «было/стало»). Реальные цифры и названия, ничего не выдумывай.`,
   mascot: `Голос — бодрый тех/лайфхак-блогер из TikTok: быстро, с энергией и подколками, на «ты». Формат подборки или сравнения: крючок с ценой, выгодой или болью («платишь 1990 в месяц? зря») → пункты «первый… второй… третий… четвёртый», у каждого одна убойная цифра или факт → честный минус или предупреждение → итог в цифрах → призыв: «напиши в комментах слово …». Реальные названия и цифры (звёзды на GitHub, цены, сроки), ничего не выдумывай.`,
   istorik: `Голос — увлечённый ютубер-рассказчик: дружелюбно, живо, с юмором и мемными подколками там, где это к месту, но без кринжа. Второе лицо «ты», настоящее время: зритель — герой. Короткие фразы, многоточия для пауз перед развязкой, вопросы к зрителю. Реальные факты, даты и цифры (числа — словами), ничего не выдумывай; спорное — «по разным оценкам». Без жестокости напоказ.`,
@@ -67,10 +71,36 @@ LESSONS FROM THE OWNER (follow strictly):
 ${lessons}` : ''}`;
 }
 
+const SCENES = Object.entries(ILLUS_ABOUT).map(([id, a]) => `  ${id}: ${a}`).join('\n');
+// the AI picks the style itself when the owner chose «Авто»
+export function pickStylePrompt({ topic }) {
+  return `Pick the best visual style for a short video. Topic: «${topic}».
+Styles:
+- istorik: history told as an adventure, animated stick figures in historical places
+- razgon: "What if..." about the human body or brain, cinematic science mini-film
+- paper: explainer / how it works / tips, warm cards with numbers, lists, charts and small living illustrations
+- mascot: tool lists, comparisons, money, tech, countdowns, dark cards with a reacting mascot
+- film: fairy tales, bedtime stories, kids' stories, calm cinematic shorts, nature, the sea, a personal story
+Return JSON {"style": "istorik" | "razgon" | "paper" | "mascot" | "film"}.`;
+}
+
 // card styles: what is on the card of every line (one call for many lines)
 export function cardsPrompt({ style, lines, lang }) {
-  return `You design the on-screen infographic cards of a TikTok explainer (style ${STYLES[style].name}). Every voice-over line gets ONE card that SHOWS its key point (never the whole sentence). Text on cards ${LANG[lang]}, SHORT (a card is read in one second), use real numbers from the line.
+  if (STYLES[style].theme === 'film') return `You are the director of a living illustrated short (fairy tale, kids' story or cinematic short). Every voice-over line gets ONE living scene, drawn and animated by code. The scenes:
+${SCENES}
+RECIPE: pick the scene that best SHOWS the line (the place, the mood, the character); keep the same scene for 2–4 lines in a row while the story stays there (it reads as one continuous shot), change it when the story moves. Add "title" (2–5 words ${LANG[lang]}) ONLY on the first line and when a new chapter starts; otherwise "".
+CHECKLIST: the scene matches the line's place and mood; no more than 3 scene changes per 15 seconds; titles short; nothing scary for kids.
+LINES:
+${lines.map((l, i) => `${i + 1}. ${l.text}`).join('\n')}
+Return JSON {"cards": [{"card": {"kind": "scene", "scene": "pond" | "lighthouse" | "underwater" | "harbor" | "desk", "title": str}, "mood": "happy", "hot": [1 key word of the line]}]} with exactly ${lines.length} items in the same order.`;
+  return `You design the on-screen cards of a TikTok explainer (style ${STYLES[style].name}). Every voice-over line gets ONE card that SHOWS its key point (never the whole sentence). Text on cards ${LANG[lang]}, SHORT (a card is read in one second), use real numbers from the line.
 Card kinds (pick what fits the line; vary them, never the same kind three times in a row):
+- {"kind":"scene","scene":"pond|lighthouse|underwater|harbor|desk","label":"</> code"|""|short tag,"title":""|2–4 words} — a LIVING illustration in the card: use it for the hook, for stories, moods and examples (at most every third card). Scenes:
+${SCENES}
+- {"kind":"chart","title":"what grows","points":[5–8 numbers],"value":"final number","suffix":""} — growth, decline, any trend over time (the line draws itself and the number counts up)
+- {"kind":"phone","name":"account name","handle":"@handle","scene":"one of the scenes"|null,"icon":"emoji"|null,"likes":"24800","comments":["short comment","short comment"]} — social media, posts, followers, virality, apps
+- {"kind":"emojis","items":[{"icon":"emoji","label":"1 word"}]} — 3–5 things in a row (ingredients, steps, options)
+- {"kind":"code","title":"file.js","lines":["3–6 short code lines"]} — anything about code, AI agents, automation, "it writes it for you"
 - {"kind":"title","icon":"emoji","text":"2–5 words","sub":"short accent line"|null} — hooks, big claims, chapter starts
 - {"kind":"number","icon":"emoji"|null,"label":"what it is","value":"1990","prefix":"","suffix":" ₽/мес","sub":"short note"|null} — any price, count, percent, year (value = digits only, counts up)
 - {"kind":"list","title":"…"|null,"items":[{"icon":"emoji","text":"2–4 words","mark":"check"|"cross"|null}]} — 2–4 items: options, rules, pros/cons
@@ -85,7 +115,8 @@ Card kinds (pick what fits the line; vary them, never the same kind three times 
 For every line also give "mood" of the mascot reacting to it: happy | surprised | smug | think | laugh | sad | wink | angry, and "hot": 1–2 key words of the line (exact words from it) to highlight.
 LINES:
 ${lines.map((l, i) => `${i + 1}. ${l.text}`).join('\n')}
-Return JSON {"cards": [{"card": {...}, "mood": str, "hot": [str]}]} with exactly ${lines.length} items in the same order.`;
+RECIPE AND CHECKLIST: the card appears when the line starts and its items appear while the line is spoken, so list items follow the order of the words; a number on a card must be the number said in the line; no card repeats the previous one; the hook (line 1) is a scene, a number or a big title; the last line is a cta or a question title; every text fits in one glance (<= 5 words per item).
+Return JSON {"cards": [{"card": {...}, "mood": str, "hot": [str]}]} with exactly ${lines.length} items in the same order.`
 }
 
 export function heroPrompt({ style, look, palette }) {

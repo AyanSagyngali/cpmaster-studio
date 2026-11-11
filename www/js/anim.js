@@ -474,9 +474,106 @@ export function drawScene(ctx, sc, t, dur, W, H, amp = 0) {
     }
   }
   fx.filter((f) => ['arrows', 'dust', 'sparks', 'explosion', 'coins'].includes(f.kind)).forEach((f, i) => drawFx(ctx, { ...f, x: f.x * kx, y: f.y, scale: (f.scale || 1) * k }, t, W, H, (sc.seed || 1) + 20 + i));
+  view(1);
+  for (const a of sc.ambient || []) drawAmbient(ctx, a, t, W, H, sc.light, (sc.seed || 1) + 40);
   if (sc.front) { view(1.3); ctx.drawImage(sc.front, -W * 0.05, -H * 0.05, W * 1.1, H * 1.1); }
   ctx.restore();
   if (sc.weather && sc.weather !== 'none') drawWeather(ctx, sc.weather, t, W, H, sc.seed || 1);
+  drawLight(ctx, sc.light, t, W, H);
+}
+
+/* ======================= light and air: what makes a code-drawn scene feel like a film ======================= */
+// light: {time: day|golden|dusk|night|interior, x, y (the source: sun, window, lamp, fire), color, kind}
+const LIGHT = {
+  day: { tint: ['#fff3d6', '#ffe9c4'], tintA: 0.22, glow: '#fff4cc', glowA: 0.35, rays: 0.05, vig: 0.28 },
+  golden: { tint: ['#ffc070', '#ff8a4c'], tintA: 0.34, glow: '#ffd27a', glowA: 0.5, rays: 0.09, vig: 0.36 },
+  dusk: { tint: ['#7b63e0', '#ff8f6a'], tintA: 0.34, glow: '#ffb38a', glowA: 0.35, rays: 0.04, vig: 0.42 },
+  night: { tint: ['#2b3a7a', '#1a2550'], tintA: 0.42, glow: '#cfe0ff', glowA: 0.3, rays: 0.03, vig: 0.55, dark: 0.28 },
+  interior: { tint: ['#ffd9a0', '#c98a5a'], tintA: 0.3, glow: '#ffe2a8', glowA: 0.45, rays: 0.12, vig: 0.45 },
+};
+let grain = null;
+function grainTile() {
+  if (grain) return grain;
+  const c = new OffscreenCanvas(128, 128), g = c.getContext('2d'), d = g.createImageData(128, 128), r = rng(7);
+  for (let i = 0; i < d.data.length; i += 4) { const v = (r() * 255) | 0; d.data[i] = d.data[i + 1] = d.data[i + 2] = v; d.data[i + 3] = 255; }
+  g.putImageData(d, 0, 0); return (grain = c);
+}
+export function drawLight(ctx, light, t, W, H) {
+  if (!light) return;
+  const L = LIGHT[light.time] || LIGHT.day, lx = Number.isFinite(+light.x) ? +light.x : W * 0.75, ly = Number.isFinite(+light.y) ? +light.y : H * 0.18, R = Math.max(W, H);
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (L.dark) { ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = `rgba(40,50,110,${L.dark})`; ctx.fillRect(0, 0, W, H); }
+  // colour grade: one soft-light pass from top to bottom
+  ctx.globalCompositeOperation = 'soft-light'; ctx.globalAlpha = L.tintA;
+  const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, L.tint[0]); g.addColorStop(1, L.tint[1]); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // the glow of the source, breathing a little (a fire or a lamp flickers)
+  const flick = /fire|lamp|torch|candle/i.test(light.kind || '') ? 0.85 + 0.15 * Math.sin(t * 11) * Math.sin(t * 7.3) : 1 + 0.04 * Math.sin(t * 1.2);
+  ctx.globalCompositeOperation = 'screen'; ctx.globalAlpha = Math.min(1, L.glowA * flick);
+  const gl = ctx.createRadialGradient(lx, ly, 0, lx, ly, R * 0.55); gl.addColorStop(0, light.color || L.glow); gl.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = gl; ctx.fillRect(0, 0, W, H);
+  // soft rays from the source, slowly turning
+  if (L.rays) {
+    ctx.globalAlpha = L.rays; ctx.fillStyle = light.color || L.glow;
+    const base = Math.atan2(H * 0.75 - ly, W * 0.45 - lx);
+    for (let i = 0; i < 6; i++) {
+      const a = base + (i - 2.5) * 0.16 + Math.sin(t * 0.25 + i) * 0.03, w = 0.035 + (i % 3) * 0.015;
+      ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx + Math.cos(a - w) * R * 1.5, ly + Math.sin(a - w) * R * 1.5); ctx.lineTo(lx + Math.cos(a + w) * R * 1.5, ly + Math.sin(a + w) * R * 1.5); ctx.closePath(); ctx.fill();
+    }
+  }
+  // vignette and film grain
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, R * 0.75); v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, `rgba(10,6,20,${L.vig})`);
+  ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+  ctx.globalAlpha = 0.05; ctx.globalCompositeOperation = 'overlay';
+  const f = Math.floor(t * 24);
+  ctx.translate(-((f * 37) % 128), -((f * 53) % 128)); ctx.fillStyle = ctx.createPattern(grainTile(), 'repeat'); ctx.fillRect(0, 0, W + 128, H + 128);
+  ctx.restore();
+}
+
+// air that moves: motes, fireflies, leaves, petals, fog, ripples, stars
+export function drawAmbient(ctx, kind, t, W, H, light, seed) {
+  const r = rng(seed + kind.length * 13), k = Math.min(W, H) / 720, lx = +light?.x || W * 0.7, ly = +light?.y || H * 0.2;
+  ctx.save();
+  if (kind === 'motes') {                                                   // dust glittering in the light
+    for (let i = 0; i < 40; i++) {
+      const x0 = lx + (r() - 0.5) * W * 0.9, y0 = ly + r() * H * 0.7, sp = 0.3 + r(), rad = (1.2 + r() * 2) * k;
+      const x = x0 + Math.sin(t * 0.4 * sp + i) * 30 * k, y = y0 + Math.cos(t * 0.3 * sp + i * 2) * 20 * k - t * 6 * sp * k;
+      ctx.globalAlpha = 0.25 + 0.35 * Math.abs(Math.sin(t * sp + i)); ctx.fillStyle = '#fff6d8';
+      ctx.beginPath(); ctx.arc(x, ((y % H) + H) % H, rad, 0, TAU); ctx.fill();
+    }
+  } else if (kind === 'fireflies') {
+    for (let i = 0; i < 18; i++) {
+      const rx = r(), ry = r(), rs = r();
+      const x = rx * W + Math.sin(t * 0.7 + i * 3) * 40 * k, y = H * (0.45 + ry * 0.5) + Math.cos(t * 0.9 + i) * 25 * k, on = Math.max(0, Math.sin(t * (1.5 + rs) + i * 1.7));
+      if (!on) continue;
+      ctx.globalAlpha = on * 0.35; ctx.fillStyle = '#d9ff7a'; ctx.beginPath(); ctx.arc(x, y, 9 * k, 0, TAU); ctx.fill();
+      ctx.globalAlpha = on; ctx.fillStyle = '#f6ffc2'; ctx.beginPath(); ctx.arc(x, y, 2.6 * k, 0, TAU); ctx.fill();
+    }
+  } else if (kind === 'leaves' || kind === 'petals') {
+    const cols = kind === 'petals' ? ['#f7b6c8', '#fbd3df', '#f49ab2'] : ['#d9822b', '#b5562a', '#e3b13c', '#7f9a3a'];
+    for (let i = 0; i < 16; i++) {
+      const sp = 0.5 + r(), x0 = r() * W, y0 = r() * H;
+      const y = ((y0 + t * 70 * sp * k) % (H + 40)) - 20, x = x0 + Math.sin(t * 1.3 * sp + i) * 50 * k - t * 20 * k;
+      ctx.save(); ctx.translate(((x % W) + W) % W, y); ctx.rotate(t * 2 * sp + i); ctx.scale(1, Math.abs(Math.sin(t * 3 * sp + i)) * 0.8 + 0.2);
+      ctx.fillStyle = cols[i % cols.length]; ctx.beginPath(); ctx.ellipse(0, 0, 9 * k, 5 * k, 0, 0, TAU); ctx.fill(); ctx.restore();
+    }
+  } else if (kind === 'fog') {                                              // soft bands drifting low
+    for (let i = 0; i < 4; i++) {
+      const x = ((r() * W + t * (14 + i * 6) * k) % (W * 1.6)) - W * 0.3, y = H * (0.62 + i * 0.08), rw = W * (0.5 + r() * 0.4);
+      const g = ctx.createRadialGradient(x, y, 0, x, y, rw); g.addColorStop(0, 'rgba(235,235,245,.30)'); g.addColorStop(1, 'rgba(235,235,245,0)');
+      ctx.save(); ctx.translate(x, y); ctx.scale(1, 0.22); ctx.translate(-x, -y); ctx.fillStyle = g; ctx.fillRect(x - rw, y - rw, rw * 2, rw * 2); ctx.restore();
+    }
+  } else if (kind === 'ripples') {                                          // rings spreading on water
+    ctx.strokeStyle = 'rgba(255,255,255,.55)';
+    for (let i = 0; i < 6; i++) {
+      const per = 2.4 + r() * 1.6, off = r() * per, x = r() * W, y = H * (0.7 + r() * 0.25), ph = ((t + off) % per) / per;
+      ctx.globalAlpha = (1 - ph) * 0.8; ctx.lineWidth = 2.5 * k * (1 - ph) + 0.5;
+      for (const m of [1, 0.6]) { ctx.beginPath(); ctx.ellipse(x, y, Math.max(0.1, ph * 90 * k * m), Math.max(0.1, ph * 26 * k * m), 0, 0, TAU); ctx.stroke(); }
+    }
+  } else if (kind === 'stars') {
+    for (let i = 0; i < 60; i++) { const x = r() * W, y = r() * H * 0.45, sp = 0.8 + r() * 2; ctx.globalAlpha = 0.4 + 0.6 * Math.abs(Math.sin(t * sp + i)); ctx.fillStyle = '#fff'; ctx.fillRect(x, y, 2 * k, 2 * k); }
+  }
+  ctx.restore();
 }
 
 function drawWeather(ctx, kind, t, W, H, seed) {

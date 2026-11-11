@@ -59,6 +59,19 @@ export function whoosh(len = 0.6) {
   return out;
 }
 
+// a short bubbly pop when a card or an item appears
+export function pop(len = 0.12) {
+  const n = Math.floor(len * RATE), out = new Float32Array(n);
+  for (let i = 0; i < n; i++) { const t = i / RATE; out[i] = Math.sin(2 * Math.PI * (900 - 2600 * t) * t) * Math.exp(-t * 38) * 0.35; }
+  return out;
+}
+// a gentle bell for fairy-tale scene changes
+export function chime(len = 1.2) {
+  const n = Math.floor(len * RATE), out = new Float32Array(n);
+  for (let i = 0; i < n; i++) { const t = i / RATE; out[i] = (Math.sin(2 * Math.PI * 1318 * t) + 0.5 * Math.sin(2 * Math.PI * 1976 * t)) * Math.exp(-t * 4) * 0.08; }
+  return out;
+}
+
 export function boom(len = 0.5) {
   const n = Math.floor(len * RATE), out = new Float32Array(n);
   for (let i = 0; i < n; i++) { const t = i / RATE; out[i] = Math.sin(2 * Math.PI * (70 - 40 * t) * t) * Math.exp(-t * 7) * 0.7; }

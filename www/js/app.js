@@ -65,13 +65,14 @@ function styleCard(id, st) {
 }
 function previewFigure(canvas, style) {                                 // a live stick figure on each style card
   const ctx = canvas.getContext('2d'); let raf, t0 = performance.now();
-  if (STYLES[style].engine === 'cards') {                                // live cards, the same drawing as in the video
-    const demo = [{ kind: 'number', label: 'Подписка', value: '1990', suffix: ' ₽', sub: 'а можно бесплатно' }, { kind: 'list', items: [{ icon: '🎙️', text: 'Свой голос', mark: 'check' }, { icon: '🤝', text: 'С разрешения', mark: 'check' }, { icon: '🚫', text: 'Чужой голос', mark: 'cross' }] }, { kind: 'step', n: 2, of: 4, icon: '🎤', title: 'F5-TTS', stat: '★ 15 537' }];
+  if (STYLES[style].engine === 'cards' || style === 'auto') {             // live cards and scenes, the same drawing as in the video
+    const scenes = ['pond', 'lighthouse', 'underwater', 'harbor', 'desk'].map((scene) => ({ kind: 'scene', scene, label: '</> code' }));
+    const demo = STYLES[style].theme === 'film' ? scenes : style === 'auto' ? [scenes[0], { kind: 'number', label: 'Подписка', value: '1990', suffix: ' ₽' }, scenes[3], { kind: 'chart', title: 'Рост', points: [1, 2, 2, 4, 7, 12], value: '9211' }] : [scenes[0], { kind: 'number', label: 'Подписка', value: '1990', suffix: ' ₽', sub: 'а можно бесплатно' }, { kind: 'list', items: [{ icon: '🎙️', text: 'Свой голос', mark: 'check' }, { icon: '🤝', text: 'С разрешения', mark: 'check' }, { icon: '🚫', text: 'Чужой голос', mark: 'cross' }] }, { kind: 'step', n: 2, of: 4, icon: '🎤', title: 'F5-TTS', stat: '★ 15 537' }];
     const moods = ['surprised', 'happy', 'smug'];
     const frame = (now) => {
-      const t = (now - t0) / 1000, i = Math.floor(t / 3) % demo.length;
+      const t = Math.max(0, (now - t0) / 1000), i = Math.floor(t / 3) % demo.length, theme = style === 'auto' ? (i % 2 ? 'mascot' : 'paper') : STYLES[style].theme;
       ctx.setTransform(240 / 720, 0, 0, 300 / 900, 0, 0);
-      drawCardShot(ctx, { theme: STYLES[style].theme, card: demo[i], mood: moods[i] }, t % 3, 3, 720, 900, 0.25 + 0.25 * Math.sin(t * 9), t);
+      drawCardShot(ctx, { theme, card: demo[i], mood: moods[i % moods.length] }, t % 3, 3, 720, 900, 0.25 + 0.25 * Math.sin(t * 9), t);
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       raf = requestAnimationFrame(frame);
     };
@@ -79,7 +80,7 @@ function previewFigure(canvas, style) {                                 // a liv
   }
   const dark = style === 'razgon';
   const frame = (now) => {
-    const t = (now - t0) / 1000;
+    const t = Math.max(0, (now - t0) / 1000);                           // the first frame can start before t0
     ctx.fillStyle = dark ? '#151a2e' : '#ece0c3'; ctx.fillRect(0, 0, 240, 300);
     if (dark) { const g = ctx.createRadialGradient(170, 90, 5, 170, 90, 150); g.addColorStop(0, 'rgba(242,165,65,.55)'); g.addColorStop(1, 'rgba(242,165,65,0)'); ctx.fillStyle = g; ctx.fillRect(0, 0, 240, 300); }
     ctx.fillStyle = dark ? '#0d0d12' : '#d6c19a'; ctx.fillRect(0, 250, 240, 50);
@@ -95,7 +96,7 @@ async function home() {
   if (S.job) return progressScreen();
   const st = S.settings;
   await show(`<div class="styles">${Object.entries(STYLES).map(([id, s]) => styleCard(id, s)).join('')}</div>
-    <h2>Тема</h2><textarea id="topic" rows="2" placeholder="Например: ${({ razgon: 'Что если бы ты не спал месяц?', paper: 'Почему мы откладываем дела и как это обойти', mascot: '4 бесплатные нейросети вместо платной подписки' })[st.style] || 'Как жил простой воин в армии Чингисхана'}">${esc(S.topic)}</textarea>
+    <h2>Тема</h2><textarea id="topic" rows="2" placeholder="Например: ${({ razgon: 'Что если бы ты не спал месяц?', paper: 'Почему мы откладываем дела и как это обойти', mascot: '4 бесплатные нейросети вместо платной подписки', film: 'Сказка на ночь про маленького кита, который боялся темноты', auto: 'Любая тема, ИИ сам выберет стиль' })[st.style] || 'Как жил простой воин в армии Чингисхана'}">${esc(S.topic)}</textarea>
     <h2>Формат</h2><div class="seg" id="kind"><button data-v="short" aria-pressed="${st.kind === 'short'}">Шортс · 1 мин</button><button data-v="long" aria-pressed="${st.kind === 'long'}">Лонг</button></div>
     <div id="mins" style="margin-top:8px" ${st.kind === 'long' ? '' : 'hidden'}><div class="seg">${[5, 10, 15].map((m) => `<button data-m="${m}" aria-pressed="${st.minutes === m}">${m} мин</button>`).join('')}</div></div>
     <h2>Язык</h2><div class="seg" id="lang"><button data-l="ru" aria-pressed="${st.lang === 'ru'}">Русский</button><button data-l="en" aria-pressed="${st.lang === 'en'}">English</button></div>
@@ -149,7 +150,7 @@ async function start() {
     // the title help may wait at most 20 s (keys at their limit must not hold the finished video)
     let m = {}; try { const x = await Promise.race([meta({ style: st.style, topic, title: r.title, script: r.script, lang: st.lang }), new Promise((ok) => setTimeout(() => ok(null), 20000))]); if (x && typeof x === 'object') m = x; } catch { /* no title help */ }
     let thumb = ''; try { thumb = job.thumbs[0] ? await thumbData(job.thumbs[0]) : ''; } catch { /* no thumbnail */ }
-    const rec = { id, created: Date.now(), topic, title: String(m.title || r.title || topic), description: String(m.description || ''), tags: Array.isArray(m.tags) ? m.tags.map(String) : [], style: st.style, kind: st.kind, seconds: Math.round(r.job.duration), voice: r.voice, ref, thumb, rating: 0, script: r.script, took: Math.round((Date.now() - job.started) / 1000) };
+    const rec = { id, created: Date.now(), topic, title: String(m.title || r.title || topic), description: String(m.description || ''), tags: Array.isArray(m.tags) ? m.tags.map(String) : [], style: r.style || st.style, kind: st.kind, seconds: Math.round(r.job.duration), voice: r.voice, ref, thumb, rating: 0, script: r.script, took: Math.round((Date.now() - job.started) / 1000) };
     try { await videos.put(rec); } catch (e) { job.log.push('История не записалась: ' + e.message); rec.note = 'Не сохранилось в историю: ' + e.message + '. Нажми «Скачать», чтобы не потерять видео.'; }
     if (job.log.length && !rec.note && ref.kind === 'mem') rec.note = job.log.slice(-1)[0];
     S.job = null;

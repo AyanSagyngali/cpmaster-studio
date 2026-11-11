@@ -1,10 +1,13 @@
 // Infographic card styles (drawn by code, so they are crisp and fast on a weak phone):
 //  paper  — warm cream paper with dots, floating white cards, one word at a time with an accent pill, a small pixel buddy
 //  mascot — dark studio, a dark info card on top, a big felt gem-mascot below whose face reacts to every line
+//  film   — a living illustrated scene (illus.js) fills the frame: fairy tales, kids, cinematic shorts
 // Gemini only says WHAT is on each card (a fixed widget vocabulary); everything moves here.
+import { drawIllus } from './illus.js';
 
 export const THEMES = {
   paper: { bg: '#f7ede3', bg2: '#f0d9c6', dot: 'rgba(140,90,50,.13)', card: '#fffaf5', ink: '#2b2119', sub: '#8d7866', line: 'rgba(80,50,30,.10)', accent: '#e2703a', accentInk: '#fff', good: '#3f9a5b', bad: '#d2483a', wave: '#e2703a', shadow: 'rgba(120,70,30,.22)', chip: '#f3e4d6' },
+  film: { bg: '#0d1020', bg2: '#0d1020', dot: 'rgba(0,0,0,0)', card: 'rgba(14,16,30,.72)', ink: '#ffffff', sub: '#c9c3d6', line: 'rgba(255,255,255,.12)', accent: '#f2a541', accentInk: '#1b1408', good: '#43c46e', bad: '#e2483c', wave: '#f2a541', shadow: 'rgba(0,0,0,.5)', chip: 'rgba(255,255,255,.12)' },
   mascot: { bg: '#18191c', bg2: '#34312e', dot: 'rgba(255,255,255,.035)', card: '#25262a', ink: '#f4f4f5', sub: '#9b9ba5', line: 'rgba(255,255,255,.08)', accent: '#f26b3a', accentInk: '#fff', good: '#43c46e', bad: '#e2483c', wave: '#9a6bff', shadow: 'rgba(0,0,0,.5)', chip: '#33343a' },
 };
 const F = (w, px) => `${w} ${Math.round(px)}px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif`;
@@ -54,7 +57,7 @@ function cardBox(ctx, th, x, y, w, h, s, k) {
   rr(ctx, x, y, w, h, 30 * k); ctx.fillStyle = th.card; ctx.fill();
   ctx.shadowColor = 'transparent'; ctx.lineWidth = 2 * k; ctx.strokeStyle = th.line; ctx.stroke();
 }
-const H_OF = { title: 0.62, number: 0.62, list: 0.9, compare: 0.82, step: 0.78, wave: 0.6, stamp: 0.66, grid: 0.82, bars: 0.86, quote: 0.62, cta: 0.7 };
+const H_OF = { scene: 1.02, chart: 0.82, phone: 1.3, emojis: 0.5, code: 0.78, title: 0.62, number: 0.62, list: 0.9, compare: 0.82, step: 0.78, wave: 0.6, stamp: 0.66, grid: 0.82, bars: 0.86, quote: 0.62, cta: 0.7 };
 
 function mark(ctx, th, x, y, r, good, u) {
   if (u <= 0) return;
@@ -83,9 +86,90 @@ const num = (v) => { const n = Number(String(v).replace(/[^\d.,-]/g, '').replace
 const fmt = (n, src) => { const dec = /[.,]\d/.test(String(src)) ? 1 : 0; return n.toLocaleString('ru-RU', { minimumFractionDigits: dec, maximumFractionDigits: dec }); };
 
 // the widget inside a card. c = Gemini's card, box = inner area, lt = seconds since the card appeared
-function widget(ctx, th, c, x, y, w, h, lt, amp, k) {
+function widget(ctx, th, c, x, y, w, h, lt, amp, k, dur = 4, t = lt) {
   const cx = x + w / 2;
   switch (c.kind) {
+    case 'chart': {                                                         // a line that draws itself, with a counter
+      const pts = (Array.isArray(c.points) ? c.points : []).map(num).filter((v) => v != null).slice(0, 10);
+      const P = pts.length >= 2 ? pts : [2, 3, 2.5, 5, 4.5, 8, 12];
+      const lo = Math.min(...P), hi = Math.max(...P), u = ease((lt - 0.2) / Math.min(2.2, dur * 0.6));
+      if (c.title) fitText(ctx, c.title, x + 10 * k, y + 24 * k, w * 0.6, 28 * k, { weight: 800, color: th.ink, align: 'left', maxLines: 1 });
+      const last = num(c.value) ?? P[P.length - 1];
+      fitText(ctx, `${c.prefix || ''}${fmt(last * u, c.value ?? last)}${c.suffix || ''}`, x + w - 10 * k, y + 26 * k, w * 0.45, 44 * k, { weight: 900, color: th.accent, align: 'right', maxLines: 1 });
+      const gx = x + 10 * k, gy = y + 70 * k, gw = w - 20 * k, gh = h - 90 * k;
+      ctx.strokeStyle = th.line; ctx.lineWidth = 2 * k;
+      for (let i = 0; i <= 3; i++) { ctx.beginPath(); ctx.moveTo(gx, gy + (gh * i) / 3); ctx.lineTo(gx + gw, gy + (gh * i) / 3); ctx.stroke(); }
+      const at = (i) => [gx + (gw * i) / (P.length - 1), gy + gh - ((P[i] - lo) / Math.max(1e-9, hi - lo)) * gh * 0.9 - gh * 0.05];
+      const upto = u * (P.length - 1), n = Math.floor(upto), fr = upto - n;
+      const head = n < P.length - 1 ? [at(n)[0] + (at(n + 1)[0] - at(n)[0]) * fr, at(n)[1] + (at(n + 1)[1] - at(n)[1]) * fr] : at(P.length - 1);
+      ctx.beginPath(); ctx.moveTo(...at(0)); for (let i = 1; i <= n; i++) ctx.lineTo(...at(i)); ctx.lineTo(...head);
+      ctx.save(); ctx.lineTo(head[0], gy + gh); ctx.lineTo(gx, gy + gh); ctx.closePath();
+      const g = ctx.createLinearGradient(0, gy, 0, gy + gh); g.addColorStop(0, th.accent + '55'); g.addColorStop(1, th.accent + '00'); ctx.fillStyle = g; ctx.fill(); ctx.restore();
+      ctx.beginPath(); ctx.moveTo(...at(0)); for (let i = 1; i <= n; i++) ctx.lineTo(...at(i)); ctx.lineTo(...head);
+      ctx.strokeStyle = th.accent; ctx.lineWidth = 7 * k; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.stroke();
+      ctx.beginPath(); ctx.arc(head[0], head[1], 11 * k, 0, 6.283); ctx.fillStyle = th.card; ctx.fill(); ctx.lineWidth = 6 * k; ctx.stroke();
+      break;
+    }
+    case 'phone': {                                                         // a social post on a phone screen
+      const pw = Math.min(w * 0.7, h * 0.52), ph = h, px = cx - pw / 2;
+      rr(ctx, px, y, pw, ph, 40 * k); ctx.fillStyle = '#16161a'; ctx.fill();
+      rr(ctx, px + 12 * k, y + 12 * k, pw - 24 * k, ph - 24 * k, 30 * k); ctx.fillStyle = '#ffffff'; ctx.fill();
+      ctx.save(); ctx.clip();
+      const sx = px + 12 * k, sy = y + 12 * k, sw = pw - 24 * k;
+      ctx.fillStyle = th.accent; ctx.beginPath(); ctx.arc(sx + 44 * k, sy + 56 * k, 22 * k, 0, 6.283); ctx.fill();
+      fitText(ctx, c.name || 'you', sx + 78 * k, sy + 48 * k, sw - 100 * k, 22 * k, { weight: 800, color: '#111', align: 'left', maxLines: 1 });
+      fitText(ctx, c.handle || '@cpmaster', sx + 78 * k, sy + 72 * k, sw - 100 * k, 17 * k, { weight: 600, color: '#888', align: 'left', maxLines: 1 });
+      const iy = sy + 96 * k, ih = sw;
+      ctx.save(); ctx.beginPath(); ctx.rect(sx, iy, sw, ih); ctx.clip();
+      if (c.scene) { ctx.translate(sx, iy); drawIllus(ctx, c.scene, t, sw, ih, 3); }
+      else { ctx.fillStyle = th.chip; ctx.fillRect(sx, iy, sw, ih); ctx.font = EMO(ih * 0.4); ctx.fillStyle = '#000'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(c.icon || '🔥', sx + sw / 2, iy + ih / 2); }
+      ctx.restore();
+      const likes = num(c.likes) ?? 12400, u = ease((lt - 0.4) / 1.6), ly = iy + ih + 34 * k;
+      ctx.font = EMO(28 * k); ctx.fillStyle = '#000'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText('❤️', sx + 20 * k, ly);
+      fitText(ctx, fmt(likes * u, likes), sx + 62 * k, ly, sw * 0.6, 24 * k, { weight: 800, color: '#111', align: 'left', maxLines: 1 });
+      (Array.isArray(c.comments) ? c.comments : []).slice(0, 2).forEach((cm, i) => {
+        const a = ease((lt - 1 - i * 0.6) / 0.35); if (a <= 0) return;
+        ctx.globalAlpha = a; const by = ly + (46 + i * 52) * k;
+        rr(ctx, sx + 16 * k, by - 20 * k, sw - 32 * k, 40 * k, 20 * k); ctx.fillStyle = '#f1f1f4'; ctx.fill();
+        fitText(ctx, String(cm), sx + 32 * k, by, sw - 64 * k, 18 * k, { weight: 600, color: '#222', align: 'left', maxLines: 1 });
+        ctx.globalAlpha = 1;
+      });
+      ctx.restore();
+      break;
+    }
+    case 'emojis': {                                                        // a row of emoji cards popping in
+      const items = (Array.isArray(c.items) ? c.items : []).slice(0, 5), n = Math.max(1, items.length), cell = Math.min(w / n, h * 0.95);
+      items.forEach((it, i) => {
+        const u = pop(lt, 0.15 + i * Math.min(0.35, (dur * 0.6) / n), 0.45); if (u <= 0) return;
+        const ex = x + (w - cell * n) / 2 + cell * i + cell / 2, ey = y + h * 0.42 + Math.sin(t * 2.4 + i) * 4 * k;
+        ctx.save(); ctx.translate(ex, ey); ctx.scale(u, u);
+        rr(ctx, -cell * 0.42, -cell * 0.42, cell * 0.84, cell * 0.84, cell * 0.2); ctx.fillStyle = th.chip; ctx.fill();
+        ctx.font = EMO(cell * 0.46); ctx.fillStyle = '#000'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(it.icon || '✨', 0, cell * 0.02);
+        ctx.restore();
+        if (it.label) fitText(ctx, it.label, ex, y + h * 0.92, cell * 0.95, 20 * k, { weight: 700, color: th.sub, maxLines: 1 });
+      });
+      break;
+    }
+    case 'code': {                                                          // an editor window typing code
+      rr(ctx, x - 6 * k, y - 6 * k, w + 12 * k, h + 12 * k, 20 * k); ctx.fillStyle = '#1d1f27'; ctx.fill();
+      ['#ff5f57', '#febc2e', '#28c840'].forEach((col, i) => { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x + (20 + i * 26) * k, y + 20 * k, 8 * k, 0, 6.283); ctx.fill(); });
+      fitText(ctx, c.title || 'reel.html', cx, y + 20 * k, w * 0.5, 18 * k, { weight: 600, color: '#8a8fa3', maxLines: 1 });
+      const lines = (Array.isArray(c.lines) ? c.lines : ['tl.from(".title", {y: 80}, 0.2)', 'tl.from(".cup", {scale: 0}, 0.9)', 'tl.to(".steam", {y: -40}, 1.4)']).slice(0, 6).map(String);
+      const total = lines.reduce((a, l) => a + l.length, 0), shown = Math.floor(clamp((lt - 0.2) / Math.min(2.4, dur * 0.7)) * total);
+      let left = shown;
+      ctx.font = `600 ${Math.round(22 * k)}px ui-monospace, "Cascadia Code", Consolas, monospace`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      lines.forEach((l, i) => {
+        const part = l.slice(0, Math.max(0, left)); left -= l.length; const ly = y + (62 + i * 38) * k;
+        ctx.fillStyle = '#5c6370'; ctx.fillText(String(i + 1).padStart(2, ' '), x + 12 * k, ly);
+        let xx = x + 56 * k;
+        for (const tok of part.split(/(\s+|[(){}\[\],.:;]|"[^"]*"?|'[^']*'?)/).filter(Boolean)) {
+          ctx.fillStyle = /^["']/.test(tok) ? '#98c379' : /^(const|let|tl|gsap|function|return|await)$/.test(tok) ? '#f2a541' : /^[\d.]+$/.test(tok) ? '#d19a66' : /^[(){}\[\],.:;]$/.test(tok) ? '#abb2bf' : '#e5e9f0';
+          ctx.fillText(tok, xx, ly); xx += ctx.measureText(tok).width;
+        }
+        if (left <= 0 && left > -l.length - 1 && Math.floor(lt * 2) % 2 === 0) { ctx.fillStyle = th.accent; ctx.fillRect(xx + 2 * k, ly - 13 * k, 3 * k, 26 * k); }
+      });
+      break;
+    }
     case 'number': {
       const target = num(c.value), u = ease((lt - 0.2) / 1.1);
       const shown = target == null ? String(c.value ?? '') : fmt(target * u, c.value);
@@ -100,7 +184,7 @@ function widget(ctx, th, c, x, y, w, h, lt, amp, k) {
       if (c.title) fitText(ctx, c.title, cx, y + 26 * k, w * 0.9, 30 * k, { weight: 800, color: th.ink, maxLines: 1 });
       const top = y + (c.title ? 64 * k : 10 * k), rh = (y + h - top) / Math.max(items.length, 2);
       items.forEach((it, i) => {
-        const at = 0.25 + i * 0.45, u = ease((lt - at) / 0.4), ry = top + rh * i + rh / 2;
+        const at = 0.25 + i * Math.min(0.9, Math.max(0.35, (dur * 0.7) / Math.max(1, items.length))), u = ease((lt - at) / 0.4), ry = top + rh * i + rh / 2;
         if (u <= 0) return;
         ctx.save(); ctx.globalAlpha = u; ctx.translate((1 - u) * 40 * k, 0);
         rr(ctx, x + 6 * k, ry - rh * 0.4, w - 12 * k, rh * 0.8, 18 * k);
@@ -287,18 +371,36 @@ function buddy(ctx, x, y, s, t, th) {
 // it: {card, mood, theme}, lt: seconds into the shot
 export function drawCardShot(ctx, it, lt, dur, W, H, amp, t) {
   const th = THEMES[it.theme] || THEMES.paper, k = Math.min(W, H) / 720, vertical = H >= W;
-  drawBg(ctx, th, W, H, t, it.theme);
   const c = it.card || { kind: 'title', text: '' };
-  const cw = vertical ? W * 0.88 : W * 0.52, ch = cw * (H_OF[c.kind] || 0.66) * (vertical ? 1.08 : 0.9);
+  if (it.theme === 'film') {                                                 // the living scene IS the frame; a short title sits in the top safe area
+    drawIllus(ctx, c.scene || it.scene || 'harbor', t, W, H, it.seed || 5);
+    const txt = c.title || c.text;
+    if (txt) {
+      const u = ease((lt - 0.2) / 0.6);
+      ctx.save(); ctx.globalAlpha = u; ctx.translate(0, (1 - u) * 20 * k); ctx.shadowColor = 'rgba(0,0,0,.65)'; ctx.shadowBlur = 18 * k;
+      fitText(ctx, txt, W / 2, vertical ? H * 0.2 : H * 0.16, W * 0.84, 62 * k, { weight: 900, color: '#fff', maxLines: 2 });
+      ctx.restore();
+    }
+    return;
+  }
+  drawBg(ctx, th, W, H, t, it.theme);
+  // the card never reaches the captions (from 0.7 H) or the bottom safe area
+  const cw = vertical ? W * 0.88 : W * 0.52, ch = Math.min(cw * (H_OF[c.kind] || 0.66) * (vertical ? 1.08 : 0.9), vertical ? H * 0.5 : H * 0.84);
   const cx = vertical ? (W - cw) / 2 : W * 0.08;
   const cy = (vertical ? (it.theme === 'mascot' ? H * 0.11 : H * 0.17) : (H - ch) / 2) + Math.sin(t * 1.6) * 5 * k;
   const s = pop(lt, 0, 0.5) * (lt > dur - 0.2 ? 1 - 0.06 * (lt - dur + 0.2) / 0.2 : 1);
   cardBox(ctx, th, cx, cy, cw, ch, s, k);
-  widget(ctx, th, c, cx + 26 * k, cy + 22 * k, cw - 52 * k, ch - 44 * k, lt, amp, k);
+  if (c.kind === 'scene') {                                                  // a living illustration inside the card, like a framed clip
+    ctx.save(); rr(ctx, cx + 12 * k, cy + 12 * k, cw - 24 * k, ch - 24 * k, 22 * k); ctx.clip();
+    ctx.translate(cx + 12 * k, cy + 12 * k); drawIllus(ctx, c.scene, t, cw - 24 * k, ch - 24 * k, it.seed || 5);
+    ctx.restore();
+    if (c.label) chip(ctx, th, cx + 40 * k + Math.min(cw * 0.3, c.label.length * 8 * k), cy + 44 * k, c.label, k, true);
+    if (c.title) { ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 14 * k; fitText(ctx, c.title, cx + cw / 2, cy + ch - 60 * k, cw * 0.84, 44 * k, { weight: 900, color: '#fff', maxLines: 2 }); ctx.restore(); }
+  } else widget(ctx, th, c, cx + 26 * k, cy + 22 * k, cw - 52 * k, ch - 44 * k, lt, amp, k, dur, t);
   ctx.restore();
   if (it.theme === 'mascot') {
-    const r = vertical ? W * 0.26 : H * 0.3;
-    gem(ctx, vertical ? W * 0.5 : W * 0.77, vertical ? H * 0.74 : H * 0.55, r, t, amp, it.mood || 'happy', lt);
+    const r = vertical ? W * 0.24 : H * 0.3;                                 // the mascot stays above the bottom 15% safe area
+    gem(ctx, vertical ? W * 0.5 : W * 0.77, vertical ? H * 0.69 : H * 0.55, r, t, amp, it.mood || 'happy', lt);
   } else buddy(ctx, cx + cw - 30 * k, cy - 4 * k, 6 * k, t, th);
 }
 
@@ -308,9 +410,10 @@ export function drawCardWord(ctx, word, W, H, age, theme, hot) {
   const y = H >= W ? H * 0.74 : H * 0.86;
   ctx.save(); ctx.translate(W / 2, y); ctx.scale(u, u);
   ctx.font = F(900, 58 * k); const tw = ctx.measureText(word).width;
+  if (theme === 'film' && !hot) { ctx.shadowColor = 'rgba(0,0,0,.7)'; ctx.shadowBlur = 14 * k; }
   if (hot) { rr(ctx, -tw / 2 - 18 * k, -40 * k, tw + 36 * k, 80 * k, 16 * k); ctx.fillStyle = th.accent; ctx.fill(); }
   ctx.fillStyle = hot ? th.accentInk : th.ink; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(word, 0, 3 * k);
   ctx.restore();
 }
 
-export const CARD_KINDS = 'title, number, list, compare, step, wave, stamp, grid, bars, quote, cta';
+export const CARD_KINDS = 'scene, title, number, list, compare, step, wave, stamp, grid, bars, quote, chart, phone, emojis, code, cta';

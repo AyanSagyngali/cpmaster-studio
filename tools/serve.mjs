@@ -16,9 +16,11 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     return res.end(fs.existsSync(SECRETS) ? fs.readFileSync(SECRETS, 'utf8') : '');
   }
-  if (u.pathname === '/dev/save' && req.method === 'POST') {                       // test videos -> Desktop (this computer only)
+  if (u.pathname === '/dev/save' && req.method === 'POST') {                       // test videos -> Desktop/CPMaster-tests (this computer only)
     const name = (u.searchParams.get('name') || 'test.mp4').replace(/[^\w.\-а-яА-Я]/g, '_');
-    const out = fs.createWriteStream(path.join(process.env.USERPROFILE || '.', 'Desktop', name));
+    const dir = path.join(process.env.USERPROFILE || '.', 'Desktop', 'CPMaster-tests');
+    fs.mkdirSync(dir, { recursive: true });
+    const out = fs.createWriteStream(path.join(dir, name));
     req.pipe(out); out.on('finish', () => { res.writeHead(200); res.end('ok'); });
     return;
   }

@@ -22,9 +22,11 @@ Return ONE JSON object:
              "steps": [{"at": seconds, "action": "…", "to_x": n | null, "mood": "neutral|happy|proud|sad|angry|scared", "facing": 1 | -1}]}],
  "animals": [{"kind": "horse" | "camel" | "ox", "x": n, "y": n, "scale": n, "facing": 1 | -1, "color": "#hex", "gait": "stand" | "walk" | "run" | "graze", "to_x": n | null}],
  "fx": [{"kind": "…", "x": n, "y": n, "scale": n, "at": seconds, "dur": seconds | null, "dir": 1 | -1, "color": "#hex", "n": count}],
- "camera": [{"at": seconds, "move": "wide" | "push" | "pull" | "pan_left" | "pan_right" | "focus" | "shake", "target": actor index, "zoom": 1.1..1.4}]}
+ "camera": [{"at": seconds, "move": "wide" | "push" | "pull" | "pan_left" | "pan_right" | "focus" | "shake", "target": actor index, "zoom": 1.1..1.4}],
+ "light": {"time": "day" | "golden" | "dusk" | "night" | "interior", "x": n, "y": n, "kind": "sun" | "moon" | "window" | "lamp" | "fire" | "torch", "color": "#hex"},
+ "ambient": ["motes" | "fireflies" | "leaves" | "petals" | "fog" | "ripples" | "stars"] (1 to 3 of them)}
 
-THE PLACE — two SVG layers, viewBox="0 0 ${W} ${H}", flat 2D hand-drawn cartoon doodle: thick even black outlines (stroke="#1b1714", stroke-width 6–8, round caps and joins), flat solid fills, NO gradients, NO filters, NO text, NO <image>, NO <style>. Palette: ${args_palette}.
+THE PLACE — two SVG layers, viewBox="0 0 ${W} ${H}", flat 2D hand-drawn cartoon doodle: thick even black outlines (stroke="#1b1714", stroke-width 6–8, round caps and joins), flat fills plus soft linear/radial gradients for the sky, water, glow and big shapes (define them in <defs>), NO filters, NO text, NO <image>, NO <style>. Palette: ${args_palette}.
 - "back": fills the WHOLE frame: sky, far hills or city silhouette, the main buildings / walls / tents / ships of the place, detailed and historically right for the era (no crosses on mosques, nothing modern). 60–140 elements.
 - "front": a TRANSPARENT layer (no background rect) with only 1–3 foreground props at the left and right edges (bushes, rocks, barrels, a column, grass) that will slide faster than the rest; "" if nothing fits.
 - NO people, NO human figures, NO faces, NO animals in the SVG: people and animals are animated on top by code. Keep the ground strip y=${g0}..${g1} flat and clear.
@@ -38,6 +40,7 @@ THE ANIMALS (optional) — drawn and moved by code: horse, camel, ox. Use them w
 
 EFFECTS (at least ONE every shot — they make the scene alive): ${FX}. A battle gets arrows + sparks + dust + shake; a camp gets fire + smoke; a city gets flags + birds; a sea gets water.
 
+LIGHT — this is what makes the shot beautiful, like a good animated film: pick the time and mood that fit the moment (a tense night, a warm golden evening, a lamp-lit room) and put the light SOURCE where it is in the picture (x, y in the frame: the sun low over the hills, the window, the lamp, the camp fire). AMBIENT air that moves: dust motes in a sunbeam indoors, fireflies or stars at night, leaves or petals in a garden or in autumn, fog over a field or a river at dawn, ripples on any water.
 CAMERA — 1–3 moves over the scene: start wide or push, then "focus" on the figure that matters (target = its index), "shake" only for battle or disaster.
 ${hero ? `\nTHE MAIN HERO is already designed (his clothes, headwear and item are added by code): give him "role": "hero", "hat": "", "item": "", "outfit": null; choose only his place, steps and mood. ${hero}` : ''}
 ${extra}${lessons ? `\nLESSONS FROM THE OWNER (follow strictly):\n${lessons}` : ''}`;
@@ -53,7 +56,7 @@ Visual idea: ${idea}
 Return ONE JSON object {"back": "<svg …>…</svg>", "front": "<svg …>…</svg>" | ""}.
 "back": viewBox="0 0 ${W} ${H}", fills the WHOLE frame. Layers: sky (pale, at most ONE sun or moon, a few clouds), far background (hills, mountains or a city skyline), the middle ground with the MAIN subject of the place drawn large and recognisable with real historical detail (e.g. Vienna: massive stone bastions with crenellations, a gate, Gothic spires behind; Istanbul: domes and slim minarets; a steppe camp: felt yurts with smoke holes; a port: wooden ships with masts and sails), then the ground. DETAIL is what makes it beautiful: windows, doors, roof tiles, flags, lanterns, crates, plants, cracks, stones, carpets, pots — every surface gets small believable details and texture strokes, and the place reads clearly at a glance (one main subject, big shapes first, small details second). The ground strip y=${g0}..${g1} is flat, open and clear (figures stand there). Side props in the foreground (rocks, barrels, carts, plants) only at the far left and right.
 "front": a TRANSPARENT layer (no background rect) with 1–3 foreground props at the very left and right edges that overlap the frame border (bushes, a column, a rock, tall grass); "" if nothing fits.
-Style: thick even black outlines (stroke="#1b1714", stroke-width 6–8, stroke-linecap="round", stroke-linejoin="round"), flat solid fills, simple hatching strokes for texture (bricks, stones, wood planks, sand ripples), NO gradients, NO filters, NO text, NO <image>, NO <style>. Palette: ${args_palette}.${look ? ' ' + look : ''} 120–220 elements. NO people, NO human figures, NO animals (they are animated on top).${lessons ? `\nLESSONS FROM THE OWNER (follow strictly):\n${lessons}` : ''}`;
+Style: thick even black outlines (stroke="#1b1714", stroke-width 6–8, stroke-linecap="round", stroke-linejoin="round"), flat fills with soft linear/radial gradients for the sky, water, light pools and big volumes (define them in <defs>, like a painted picture book), simple hatching strokes for texture (bricks, stones, wood planks, sand ripples), NO filters, NO text, NO <image>, NO <style>. Palette: ${args_palette}.${look ? ' ' + look : ''} 120–220 elements. NO people, NO human figures, NO animals (they are animated on top).${lessons ? `\nLESSONS FROM THE OWNER (follow strictly):\n${lessons}` : ''}`;
 }
 
 /* ---------------- SVG -> bitmaps (page side) ---------------- */
@@ -101,7 +104,9 @@ export async function materialize(spec, W, H, heroParts = null) {
     };
   }));
   const fx = (spec.fx || []).slice(0, 8).map((f) => ({ ...f, x: num(f.x, W / 2), y: num(f.y, H / 2), scale: num(f.scale, 1) }));
-  return { back, front, actors, animals, fx, camera: spec.camera, weather: spec.weather, seed: (Math.random() * 1000) | 0, w: W, ok: !!back };
+  return { back, front, actors, animals, fx, camera: spec.camera, weather: spec.weather,
+    light: spec.light && typeof spec.light === 'object' ? { ...spec.light, x: num(spec.light.x, W * 0.75), y: num(spec.light.y, H * 0.18) } : { time: 'day', x: W * 0.78, y: H * 0.15 },
+    ambient: (Array.isArray(spec.ambient) ? spec.ambient : []).filter((a) => ['motes', 'fireflies', 'leaves', 'petals', 'fog', 'ripples', 'stars'].includes(a)).slice(0, 3), seed: (Math.random() * 1000) | 0, w: W, ok: !!back };
 }
 
 export async function heroParts(spec) {
