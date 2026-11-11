@@ -155,6 +155,17 @@ function localCard(text, j, total, of) {
   return { card: { kind: 'title', icon: ICONS[j % ICONS.length], text: head }, mood: ['happy', 'surprised', 'think', 'laugh'][j % 4], hot: [] };
 }
 
+// Gemini sometimes answers a list with a string or an object: every card is brought to the shape the drawing expects
+const asList = (v) => (Array.isArray(v) ? v : v == null || v === '' ? [] : [v]);
+function tidyCard(x) {
+  const c = x?.card;
+  if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+  const card = { ...c, kind: String(c.kind || 'title') };
+  for (const key of ['points', 'lines', 'comments']) if (key in card) card[key] = asList(card[key]).map((v) => (typeof v === 'object' ? JSON.stringify(v) : v));
+  if ('items' in card) card.items = asList(card.items).map((v) => (v && typeof v === 'object' ? v : { text: String(v) }));
+  return { card, mood: typeof x.mood === 'string' ? x.mood : 'happy', hot: asList(x.hot).map(String) };
+}
+
 // card styles: Gemini lays out the cards of many lines in one call, the code animates them
 async function cardVideo({ style, lang, lines, segs, words, duration, voiceTrack, short, W, H, fps, theme, plan, topic, useEleven, signal, step, wait, onScene }) {
   const B = 14, batches = [];
@@ -168,7 +179,7 @@ async function cardVideo({ style, lang, lines, segs, words, duration, voiceTrack
       catch (e) { if (signal?.aborted) throw e; wait('Карточки: ' + e.message + (fast ? ' — пробую другую модель' : ' — собираю их из текста')); }
     }
     done += b.length; step('scenes', done, lines.length, `Карточки ${done} из ${lines.length}`);
-    return b.map((l, i) => (cards[i]?.card ? cards[i] : null));
+    return b.map((l, i) => tidyCard(cards[i]));
   });
   const ofN = lines.filter((l) => ordinal(l.text)).length;
   const cards = parts.flat().map((c, j) => c || localCard(lines[j].text, j, lines.length, ofN));

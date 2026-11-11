@@ -180,7 +180,7 @@ function widget(ctx, th, c, x, y, w, h, lt, amp, k, dur = 4, t = lt) {
       break;
     }
     case 'list': case 'compare': {
-      const items = (c.kind === 'compare' ? [{ text: c.bad || c.left, mark: 'cross', icon: c.bad_icon }, { text: c.good || c.right, mark: 'check', icon: c.good_icon }] : c.items || []).slice(0, 4);
+      const items = (c.kind === 'compare' ? [{ text: c.bad || c.left, mark: 'cross', icon: c.bad_icon }, { text: c.good || c.right, mark: 'check', icon: c.good_icon }] : Array.isArray(c.items) ? c.items : []).slice(0, 4);
       if (c.title) fitText(ctx, c.title, cx, y + 26 * k, w * 0.9, 30 * k, { weight: 800, color: th.ink, maxLines: 1 });
       const top = y + (c.title ? 64 * k : 10 * k), rh = (y + h - top) / Math.max(items.length, 2);
       items.forEach((it, i) => {
@@ -261,7 +261,7 @@ function widget(ctx, th, c, x, y, w, h, lt, amp, k, dur = 4, t = lt) {
       break;
     }
     case 'bars': {
-      const items = (c.items || []).slice(0, 5), max = Math.max(1, ...items.map((i) => num(i.value) || 0));
+      const items = (Array.isArray(c.items) ? c.items : []).slice(0, 5), max = Math.max(1, ...items.map((i) => num(i.value) || 0));
       if (c.title) fitText(ctx, c.title, cx, y + 24 * k, w * 0.9, 30 * k, { weight: 800, color: th.ink, maxLines: 1 });
       const top = y + (c.title ? 60 * k : 10 * k), rh = (y + h - top) / Math.max(items.length, 3);
       items.forEach((it, i) => {
