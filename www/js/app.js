@@ -52,7 +52,8 @@ async function keysScreen(first) {
   const el = K.of('eleven'), gm = K.of('gemini'), cost = await avgCost('short'), now = Date.now(), reset = K.geminiReset();
   const resetAt = new Date(reset).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
   const elLeft = el.filter((k) => k.ok !== false).reduce((s, k) => s + (k.left || 0), 0), shorts = Math.floor(elLeft / cost.v);
-  const gmOk = gm.filter((k) => k.ok && !(k.cool > now)).length, gmCool = gm.filter((k) => k.ok && k.cool > now).length;
+  const gs = new Map(gm.map((k) => [k, K.geminiState(k, [...new Set([...AI.MODELS.text, ...AI.MODELS.fast])], now)]));
+  const gmOk = gm.filter((k) => k.ok && gs.get(k).state === 'ok').length, gmCool = gm.filter((k) => k.ok && /minute|day/.test(gs.get(k).state)).length;
   const elRows = el.map((k) => {
     const total = k.total || Math.max(k.left || 0, 10000), left = k.left ?? 0, frac = Math.max(0, Math.min(1, left / total)), low = frac < 0.15, n = Math.floor(left / cost.v);
     const state = k.ok === false ? ['bad', k.note || 'не работает'] : k.ok == null ? ['', 'проверяю'] : low ? ['low', 'мало'] : ['ok', 'работает'];
@@ -61,9 +62,11 @@ async function keysScreen(first) {
       <div class="kinfo">${fmtN(left)} из ${fmtN(total)} символов · ≈ ${n} ${plural(n, 'шортс', 'шортса', 'шортсов')}${k.reset ? ` · обновится ${new Date(k.reset).toLocaleDateString('ru', { day: 'numeric', month: 'short' })}` : ''}</div></div>`;
   }).join('');
   const gmRows = gm.map((k) => {
-    const cool = k.cool > now, day = cool && k.coolKind === 'day';
+    const g = gs.get(k), day = g.state === 'day', cool = g.state === 'minute';
     const state = k.ok === false ? ['bad', k.note || 'не работает'] : k.ok == null ? ['', 'проверяю'] : day ? ['low', 'дневной лимит'] : cool ? ['low', 'минутный лимит'] : ['ok', 'работает'];
-    const when = day ? ` · снова работает в ${resetAt}` : cool ? ` · освободится через <span data-cd="${k.cool}"></span>` : '';
+    // which models of this key rest and until when (Google limits each model separately)
+    const parts = g.state === 'ok' ? g.limited.filter((x) => x.kind !== 'none').map((x) => `${esc(x.m.replace(/^gemini-/, ''))}: ${x.kind === 'day' ? `лимит до ${new Date(x.until).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}` : 'минутный лимит'}`) : [];
+    const when = day ? ` · снова работает в ${resetAt}` : cool ? ` · освободится через <span data-cd="${g.until}"></span>` : parts.length ? ` · ${parts.join(', ')}` : '';
     return `<div class="key2"><div class="krow"><b>Gemini</b><code>${esc(K.tail(k.key))}</code><span class="pill ${state[0]}">${esc(state[1])}</span><button data-del="${esc(k.key)}" aria-label="Удалить ключ">✕</button></div>
       <div class="kinfo">сегодня ${K.usedToday(k)} ${plural(K.usedToday(k), 'запрос', 'запроса', 'запросов')}${when}</div></div>`;
   }).join('');

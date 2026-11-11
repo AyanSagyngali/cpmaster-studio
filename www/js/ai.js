@@ -27,28 +27,98 @@ const thinking = (m, level) => {
   return lv ? { thinkingLevel: lv } : null;
 };
 
+// What Google said in a 429. The text says little; the real reason is in error.details:
+// QuotaFailure.violations[].quotaId (…PerDay… / …PerMinute…), quotaValue (the limit; "0" = no quota on this plan), RetryInfo.retryDelay.
+export function quotaInfo(err = {}) {
+  const det = Array.isArray(err.details) ? err.details : [], msg = String(err.message || '');
+  const v = det.flatMap((d) => d.violations || []);
+  const ids = v.map((x) => `${x.quotaId || ''} ${x.quotaMetric || ''}`).join(' ');
+  const num = (re) => { const x = v.find((y) => re.test(y.quotaId || '')); return x && x.quotaValue != null ? +x.quotaValue : null; };
+  const retry = det.find((d) => d.retryDelay)?.retryDelay || msg.match(/retry in ([\d.]+)\s*s/i)?.[1];
+  return {
+    day: /PerDay/i.test(ids) || (!v.length && /per day|daily/i.test(msg)),
+    zero: v.some((x) => String(x.quotaValue) === '0') || /limit: 0\b/.test(msg),
+    retry: retry ? parseFloat(retry) * 1000 : 0,
+    perDay: num(/Requests.*PerDay|PerDay.*Requests/i),
+    perMinute: num(/Requests.*PerMinute|PerMinute.*Requests/i),
+  };
+}
+
+export const MODELS = { text: TEXT, fast: FAST, image: IMAGE, tts: TTS };
+const PATIENCE = 20000;                       // a better model is worth waiting this long for before a weaker one takes over
+const recent = new Map();                     // `key|model` -> request times in the last minute (pacing by the learned per-minute quota)
+const told = new Set();                       // switch notices already shown
+const at = (t) => new Date(t).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
+
+// until when (key, model) can not be asked; <= now = free
+function blocked(k, m, now) {
+  const l = K.limitOf(k, m, now);
+  let t = l ? l.until : 0;
+  const cap = k.quota?.[m]?.minute;
+  if (cap) {
+    const xs = (recent.get(`${k.key}|${m}`) || []).filter((x) => x > now - 60000);
+    recent.set(`${k.key}|${m}`, xs);
+    if (xs.length >= cap) t = Math.max(t, xs[xs.length - cap] + 60500);
+  }
+  return t;
+}
+// best model first; inside a model the key that rested longest. -> {m, k} | {wait, m?} | {none}
+function choose(models, want, busy, now) {
+  let soon = Infinity, why = '';
+  for (const m of models) {
+    const b = busy.get(m) || 0;
+    if (b > now) { if (b < soon) { soon = b; why = `${m} перегружена`; } continue; }
+    const keys = K.of('gemini').filter((k) => k.ok !== false && want(k) && K.offers(k, m));
+    if (!keys.length) continue;
+    const free = keys.filter((k) => blocked(k, m, now) <= now);
+    if (free.length) {
+      const k = free.sort((a, b2) => (a.last || 0) - (b2.last || 0))[0];
+      k.last = now;
+      return { m, k };
+    }
+    const minute = keys.filter((k) => K.limitOf(k, m, now)?.kind !== 'day' && K.limitOf(k, m, now)?.kind !== 'none').map((k) => blocked(k, m, now));
+    const t = minute.length ? Math.min(...minute) : Infinity;
+    if (t - now <= PATIENCE) return { wait: t, why: `все ключи модели ${m} на минутном лимите` };
+    if (t < soon) { soon = t; why = `все ключи на минутном лимите`; }
+  }
+  return soon < Infinity ? { wait: soon, why } : { none: true };
+}
+
 // one generateContent call over keys and models. kind: 'text' | 'fast' | 'image' | 'tts'
 async function call(kind, body, { signal, tries = 40, onWait, think } = {}) {
-  const models = offered(kind === 'image' ? IMAGE : kind === 'tts' ? TTS : kind === 'fast' ? FAST : TEXT);
+  const models = offered(MODELS[kind] || TEXT);
   if (!models.length) throw new Error('У ключей Gemini нет подходящей модели');
-  const busy = new Map();                                       // model -> overloaded until
+  const busy = new Map();                                       // model -> overloaded / not answering until
+  const want = kind === 'image' ? (k) => k.image !== false : () => true;
   let lastErr = 'Gemini не ответил';
-  for (let i = 0; i < tries; i++) {
+  for (let sent = 0; sent < tries;) {
     if (signal?.aborted) throw new Stop();
-    const m = models.find((x) => (busy.get(x) || 0) <= Date.now()) || models[i % models.length];
-    const want = kind === 'image' ? (k) => k.image !== false : () => true;
-    const k = K.next('gemini', want);
-    if (!k) {
-      if (kind === 'image' && !K.of('gemini').some((x) => x.ok !== false && x.image !== false)) return null;     // no key can draw at all
-      const wait = Math.min(60000, Math.max(1500, K.soonest('gemini', want) - Date.now()));
-      onWait?.(`Все ключи Gemini на минутном лимите, жду ${Math.ceil(wait / 1000)} с`);
+    const now = Date.now();
+    if (kind === 'image' && !K.of('gemini').some((x) => x.ok !== false && x.image !== false)) return null;   // no key can draw at all
+    const c = choose(models, want, busy, now);
+    if (c.none) {
+      if (kind === 'image') return null;
+      const any = K.of('gemini').filter((k) => k.ok !== false);
+      if (!any.length) throw new Error('Нет рабочих ключей Gemini');
+      throw new Error(`Дневной лимит Gemini кончился на всех ключах и моделях. Обновится в ${at(K.geminiReset())}. Добавь ключи из других проектов Google или подожди`);
+    }
+    if (c.wait) {
+      const wait = Math.min(60000, Math.max(1000, c.wait - now));
+      onWait?.(`Gemini: ${c.why}, жду ${Math.ceil(wait / 1000)} с`);
       await sleep(wait, signal);
       continue;
     }
+    const { m, k } = c;
+    if (m !== models[0] && !told.has(`${kind}|${m}`)) {
+      const off = models.slice(0, models.indexOf(m)).filter((x) => !(busy.get(x) > now)).map((x) => x).join(', ');
+      if (off) { told.add(`${kind}|${m}`); onWait?.(`Gemini: у ${off} лимит на всех ключах, работаю на ${m}`); }
+    }
+    sent++;
     let r, j;
     const tm = new AbortController(), timer = setTimeout(() => tm.abort(), kind === 'image' ? 90000 : 60000);   // a stuck request goes to the next model / key
     const onAbort = () => tm.abort(); signal?.addEventListener('abort', onAbort, { once: true });
     try {
+      const rk = `${k.key}|${m}`; recent.set(rk, [...(recent.get(rk) || []), Date.now()]);
       r = await fetch(`${API}${m}:generateContent?key=${encodeURIComponent(k.key)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: tm.signal,
         body: JSON.stringify(kind === 'image' || kind === 'tts' || !thinking(m, think) ? body : { ...body, generationConfig: { ...body.generationConfig, thinkingConfig: thinking(m, think) } }),
@@ -60,7 +130,7 @@ async function call(kind, body, { signal, tries = 40, onWait, think } = {}) {
       lastErr = 'нет интернета'; await sleep(2000, signal); continue;
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); }
     if (r.ok) {
-      K.used(k);
+      K.used(k, m);
       const parts = j.candidates?.[0]?.content?.parts || [];
       if (kind === 'image' || kind === 'tts') {
         const d = parts.find((p) => p.inlineData)?.inlineData;
@@ -73,14 +143,14 @@ async function call(kind, body, { signal, tries = 40, onWait, think } = {}) {
     }
     const msg = j.error?.message || '';
     if (r.status === 429) {
-      if (/limit: 0/.test(msg)) {                               // the free plan has no quota for this model at all
+      const q = quotaInfo(j.error);
+      K.learn(k, m, { day: q.perDay, minute: q.perMinute });
+      if (q.zero) {                                              // this key's plan has no quota for this model: other models / keys go on
         if (kind === 'image') { k.image = false; K.save(); continue; }
-        busy.set(m, Date.now() + 3600e3); continue;
+        K.limit(k, m, 'none', K.geminiReset()); continue;
       }
-      const retry = (j.error?.details || []).find((d) => d.retryDelay)?.retryDelay;
-      const perDay = /per day|PerDay/i.test(msg);
-      K.cool(k, perDay ? 3600e3 : retry ? parseFloat(retry) * 1000 + 500 : 20000, perDay ? 'дневной лимит' : 'минутный лимит');
-      continue;
+      if (q.day) { K.limit(k, m, 'day', K.geminiReset()); lastErr = `дневной лимит ${m}`; continue; }
+      K.limit(k, m, 'minute', Date.now() + (q.retry || 20000) + 500); lastErr = `минутный лимит ${m}`; continue;
     }
     if (r.status === 503 || r.status === 500 || r.status === 504) { busy.set(m, Date.now() + 20000); lastErr = 'Gemini перегружен'; await sleep(600, signal); continue; }
     if (r.status === 404) { busy.set(m, Date.now() + 864e5); continue; }
