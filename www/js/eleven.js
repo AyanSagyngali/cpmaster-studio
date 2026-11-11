@@ -17,8 +17,10 @@ export const left = () => K.of('eleven').filter((k) => k.ok !== false).reduce((s
 export const enough = (chars) => left() >= chars * 1.05;
 
 // -> {bytes (mp3), chars: [..], starts: [..], ends: [..]} for one piece of text
-export async function speak(text, voice, { signal, speed = 1, stability = 0.5 } = {}) {
+// Kazakh is read by Eleven v3; if a key can not use it, the multilingual model reads it instead
+export async function speak(text, voice, { signal, speed = 1, stability = 0.5, lang = 'ru' } = {}) {
   let lastErr = 'ElevenLabs не ответил';
+  let model = lang === 'kk' ? 'eleven_v3' : 'eleven_multilingual_v2';
   for (let i = 0; i < 24; i++) {
     if (signal?.aborted) throw new Error('Остановлено');
     const k = K.next('eleven', (x) => (x.left ?? 1e9) >= text.length && !(x.noVoice || []).includes(voice));
@@ -27,7 +29,7 @@ export async function speak(text, voice, { signal, speed = 1, stability = 0.5 } 
     try {
       r = await fetch(`${API}/text-to-speech/${voice}/with-timestamps?output_format=mp3_44100_128`, {
         method: 'POST', signal, headers: { 'xi-api-key': k.key, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, model_id: 'eleven_multilingual_v2', voice_settings: { stability, similarity_boost: 0.8, style: 0.15, speed } }),
+        body: JSON.stringify({ text, model_id: model, voice_settings: model === 'eleven_v3' ? { stability: 0.5 } : { stability, similarity_boost: 0.8, style: 0.15, speed: Math.max(0.7, Math.min(1.2, speed)) } }),
       });
       j = await r.json().catch(() => ({}));
     } catch { lastErr = 'нет интернета'; await new Promise((ok) => setTimeout(ok, 2000)); continue; }
@@ -40,6 +42,7 @@ export async function speak(text, voice, { signal, speed = 1, stability = 0.5 } 
     if (st === 'quota_exceeded') { k.left = 0; k.note = 'символы кончились'; K.save(); continue; }
     if (st === 'voice_not_found') { k.noVoice = [...(k.noVoice || []), voice]; K.save(); continue; }
     if (r.status === 401) { K.bad(k, 'ключ не принят'); continue; }
+    if ((r.status === 400 || r.status === 422) && model === 'eleven_v3') { model = 'eleven_multilingual_v2'; continue; }
     if (r.status === 429) { K.cool(k, 4000, 'занят'); await new Promise((ok) => setTimeout(ok, 800)); continue; }
     lastErr = `ElevenLabs: ${r.status} ${(j.detail?.message || '').slice(0, 120)}`;
   }

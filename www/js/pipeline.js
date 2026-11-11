@@ -1,13 +1,15 @@
-// The whole video, step by step like AE.LAH: script -> voice -> scenes -> montage. One video at a time.
-// onStep(stage, done, total, text) feeds the progress screen; onScene(bitmap) shows real frames as they are made.
+// The whole video, step by step: idea -> script (the style's master writer + an editor) -> voice with word timings ->
+// pictures (3D world from a production bible, cards, or stick-figure scenes) -> sound -> montage on the phone.
+// onStep(stage, done, total, text) feeds the progress screen; onScene(canvas) shows real stills as they are made.
 import * as AI from './ai.js';
 import * as EL from './eleven.js';
 import * as A from './audio.js';
 import * as F from './formats.js';
 import { makeScene, heroParts, PALETTE } from './scene.js';
 import { drawCardShot } from './cards.js';
+import { biblePrompt, tidyBible } from './bible.js';
 
-export const STAGES = [['script', 'Сценарий'], ['voice', 'Озвучка'], ['scenes', 'Сцены'], ['montage', 'Монтаж'], ['done', 'Готово']];
+export const STAGES = [['script', 'Сценарий'], ['voice', 'Озвучка'], ['scenes', 'Кадры'], ['montage', 'Монтаж'], ['done', 'Готово']];
 const LOOKS = {
   istorik: { palette: PALETTE, look: '' },
   razgon: { palette: 'deep navy #1d2440, dusk purple #3b2f55, warm amber #f2a541, soft gold #f6c86a, coral #e0664f, teal shadow #2f5d62, fog #c9c3d6, and black #0d0d12', look: 'Cinematic low-key light: ONE strong light source (a window, a lamp, a sunset), deep purple and navy shadows, warm amber highlights, soft glow shapes.' },
@@ -27,42 +29,48 @@ const pool = async (items, n, fn) => {                                // n reque
 };
 
 // «Авто»: Gemini picks the style from the topic (a quick guess from words if it can not answer)
-async function pickStyle(topic, signal, wait) {
+export async function pickStyle(topic, signal, wait) {
   try { const r = await AI.json(F.pickStylePrompt({ topic }), { fast: true, signal, onWait: wait }); if (F.STYLES[r.style] && r.style !== 'auto') return r.style; } catch (e) { if (signal?.aborted) throw e; }
-  return /сказк|ночь|дет|малыш|кит|море|мор[еяю]|рыб|bedtime|fairy|kids|story/i.test(topic) ? 'film' : /истори|войн|импери|хан|царь|век\b|history/i.test(topic) ? 'istorik' : /что если|what if/i.test(topic) ? 'razgon' : 'paper';
+  return /что если|what if/i.test(topic) ? 'razgon' : /топ|лучших|бесплатн|сравн|нейросет|приложен|tools?|apps?/i.test(topic) ? 'mascot' : /почему|как работает|why|how/i.test(topic) ? 'paper' : 'mult';
 }
 
 export async function make({ style, topic, kind, minutes = 10, lang = 'ru', voice, lessons = '', signal, onStep, onScene, onLog }) {
   const short = kind === 'short';
   const step = (s, d, t, text) => onStep?.(s, d, t, text);
   const wait = (m) => onLog?.(m);
-  if (style === 'auto') { step('script', 0, 1, 'ИИ выбирает стиль'); style = await pickStyle(topic, signal, wait); wait(`Стиль: ${F.STYLES[style].name}`); }
-  // card and scene styles render like the reels in the video: 1080x1920, 30 fps; stick figures stay lighter for weak phones
-  const crisp = F.STYLES[style].engine === 'cards';
+  if (style === 'auto' || !F.STYLES[style]) { step('script', 0, 1, 'ИИ выбирает стиль'); style = await pickStyle(topic, signal, wait); wait(`Стиль: ${F.STYLES[style].name}`); }
+  const pack = F.STYLES[style];
+  // detail first: 3D and card styles render at 1080x1920, 30 fps; stick-figure scenes stay lighter for weak phones
+  const crisp = pack.engine === 'world' || pack.engine === 'cards';
   const W = crisp ? (short ? 1080 : 1920) : (short ? 720 : 1280), H = crisp ? (short ? 1920 : 1080) : (short ? 1280 : 720), fps = crisp ? 30 : 24;
 
-  /* 1. script */
-  step('script', 0, 1, 'Gemini пишет сценарий');
+  /* 1. script: the style's master writer, then the editor */
+  step('script', 0, 1, 'Сценарист пишет по мастер-промпту стиля');
   let lines, plan;
+  const wps = F.WPS[lang] || 2.4;
   if (short) {
-    const r = await AI.json(F.linesPrompt({ style, topic, lang, lessons, words: lang === 'ru' ? 120 : 140, n: 12, short: true }), { signal, onWait: wait });
+    const words = Math.round(46 * wps), n = pack.engine === 'world' ? 10 : 12;
+    const r = await AI.json(F.linesPrompt({ style, topic, lang, lessons, words, n, short: true }), { signal, onWait: wait });
     step('script', 0, 1, 'Редактор усиливает сценарий');
     lines = await polish(r.lines || [], { style, topic, lang, lessons, short: true, signal, onWait: wait }); plan = { title: topic, hero: '', hero_look: '' };
   } else {
     plan = await AI.json(F.planPrompt({ style, topic, minutes, lang, lessons }), { signal, onWait: wait });
-    const words = Math.round(minutes * (lang === 'ru' ? 130 : 150)), per = Math.round(words / plan.chapters.length);
+    const chapters = (Array.isArray(plan.chapters) ? plan.chapters : []).filter((c) => c && c.title);
+    if (!chapters.length) throw new Error('Gemini не составил план глав');
+    plan.chapters = chapters;
+    const words = Math.round(minutes * 60 * wps), per = Math.round(words / chapters.length);
     let done = 0;
-    const parts = await pool(plan.chapters, 4, async (c, k) => {
-      const r = await AI.json(F.linesPrompt({ style, topic, lang, lessons, words: per, n: Math.max(4, Math.round(per / 20)), plan, chapter: c, k }), { signal, onWait: wait });
+    const parts = await pool(chapters, 4, async (c, k) => {
+      const r = await AI.json(F.linesPrompt({ style, topic, lang, lessons, words: per, n: Math.max(4, Math.round(per / 22)), plan, chapter: c, k }), { signal, onWait: wait });
       const out = await polish(r.lines || [], { style, topic, lang, lessons, short: false, signal, onWait: wait });
-      step('script', ++done, plan.chapters.length, `Глава ${done} из ${plan.chapters.length}`);
+      step('script', ++done, chapters.length, `Глава ${done} из ${chapters.length}`);
       return out;
     });
     lines = parts.flat();
   }
   lines = lines.filter((l) => l && String(l.text || '').trim()).map((l) => ({ text: String(l.text).trim(), idea: String(l.idea || l.text) }));
   if (lines.length < 3) throw new Error('Gemini написал слишком короткий сценарий');
-  step('script', 1, 1, `${lines.length} сцен, ${lines.reduce((s, l) => s + l.text.split(/\s+/).length, 0)} слов`);
+  step('script', 1, 1, `${lines.length} строк, ${lines.reduce((s, l) => s + l.text.split(/\s+/).length, 0)} слов`);
 
   /* 2. voice: ONE voice for the whole video. ElevenLabs if its characters are enough, else Gemini for everything */
   const chunks = []; let cur = [];
@@ -70,25 +78,26 @@ export async function make({ style, topic, kind, minutes = 10, lang = 'ru', voic
   if (cur.length) chunks.push(cur);
   const chars = lines.reduce((s, l) => s + l.text.length + 1, 0);
   let useEleven = EL.enough(chars);
+  const V = pack.voice || F.STYLES.mult.voice;
   const speakAll = async () => {
     let done = 0;
     return pool(chunks, useEleven ? 2 : 3, async (idx) => {
       const text = idx.map((j) => lines[j].text).join(' ');
       let pcm, align = null;
-      if (useEleven) { const r = await EL.speak(text, voice || EL.DEFAULT_VOICE, { signal, stability: 0.42, speed: style === 'film' ? 0.95 : short ? 1.08 : 1.02 }); pcm = await A.decode(r.bytes); align = r; }
-      else { const r = await AI.speak(text, lang === 'ru' ? 'Charon' : 'Puck', style === 'film' ? (lang === 'ru' ? 'Рассказывай как тёплый сказочник: спокойно, мягко, с паузами и улыбкой:' : 'Tell it like a warm bedtime storyteller: calm, soft, with pauses and a smile:') : lang === 'ru' ? 'Говори как живой ютубер-рассказчик: дружелюбно, энергично, с улыбкой, в хорошем темпе:' : 'Say like an engaging YouTube narrator: friendly, energetic, warm, at a good pace:', { signal, onWait: wait }); pcm = await A.decode(r.bytes); }
+      if (useEleven) { const r = await EL.speak(text, voice || V.el || EL.DEFAULT_VOICE, { signal, stability: V.stability, speed: V.speed, lang }); pcm = await A.decode(r.bytes); align = r; }
+      else { const r = await AI.speak(text, V.gemini || 'Charon', V.style?.[lang] || V.style?.en || '', { signal, onWait: wait }); pcm = await A.decode(r.bytes); }
       step('voice', ++done, chunks.length, `${useEleven ? 'ElevenLabs' : 'Gemini'}: часть ${done} из ${chunks.length}`);
       return { idx, text, pcm, align };
     });
   };
-  step('voice', 0, chunks.length, useEleven ? 'Озвучивает ElevenLabs' : 'Символы ElevenLabs кончились — озвучивает Gemini');
+  step('voice', 0, chunks.length, useEleven ? 'Озвучивает ElevenLabs' : 'Символов ElevenLabs мало — озвучивает Gemini');
   let parts;
   try { parts = await speakAll(); } catch (e) {
     if (!useEleven || signal?.aborted) throw e;
-    wait('ElevenLabs не смог озвучить всё видео: переозвучиваю целиком голосом Gemini (один голос на ролик)');
+    wait(`ElevenLabs: ${e.message}. Переозвучиваю весь ролик голосом Gemini (один голос на ролик)`);
     useEleven = false; parts = await speakAll();
   }
-  // lay the pieces end to end; every line gets its start/end (from ElevenLabs' letter times, or by length)
+  // lay the pieces end to end; every line and every word gets its start/end (ElevenLabs letter times, or by length)
   const segs = [], words = [], gap = Math.round(A.RATE * 0.12);
   let total = 0;
   for (const p of parts) total += p.pcm.length + gap;
@@ -102,7 +111,6 @@ export async function make({ style, topic, kind, minutes = 10, lang = 'ru', voic
       const a = off, b = off + lines[j].text.length; off = b + 1;
       const tAt = (c) => (p.align?.starts?.length ? (p.align.starts[Math.min(c, p.align.starts.length - 1)] ?? 0) : (c / p.text.length) * dur);
       segs[j] = { t0: base + tAt(a), t1: base + tAt(b) };
-      // words for the Shorts captions
       let wpos = a;
       for (const w of lines[j].text.split(/\s+/)) { const ws = p.text.indexOf(w, wpos); if (ws < 0) continue; words.push({ j, t0: base + tAt(ws), t1: base + tAt(ws + w.length), w: w.replace(/[«»"“”]/g, '') }); wpos = ws + w.length; }
     }
@@ -110,12 +118,13 @@ export async function make({ style, topic, kind, minutes = 10, lang = 'ru', voic
   }
   for (let j = 0; j < segs.length; j++) { segs[j].t0 = j ? segs[j - 1].t1 : 0; if (j === segs.length - 1) segs[j].t1 = total / A.RATE + 0.6; }
   const duration = total / A.RATE + 0.6;
+  const ctx = { style, pack, lang, lines, segs, words, duration, voiceTrack, short, W, H, fps, plan, topic, useEleven, signal, step, wait, onScene, lessons };
 
-  const theme = F.STYLES[style].theme;
-  if (F.STYLES[style].engine === 'cards') return cardVideo({ style, lang, lines, segs, words, duration, voiceTrack, short, W, H, fps, theme, plan, topic, useEleven, signal, step, wait, onScene });
+  if (pack.engine === 'world') return worldVideo(ctx);
+  if (pack.engine === 'cards') return cardVideo({ ...ctx, theme: pack.theme });
 
-  /* 3. scenes: the hero once, then every scene (Gemini draws the place, directs the figures) */
-  const L = LOOKS[style];
+  /* 3. stick-figure scenes: the hero once, then every scene (Gemini draws the place, directs the figures) */
+  const L = LOOKS[style] || LOOKS.istorik;
   step('scenes', 0, lines.length, 'Gemini придумывает героя');
   const hp = await heroParts(await AI.json(F.heroPrompt({ style, look: plan.hero_look || `Hero of: ${topic}`, palette: L.palette }), { fast: true, signal, onWait: wait }));
   let made = 0;
@@ -129,19 +138,59 @@ export async function make({ style, topic, kind, minutes = 10, lang = 'ru', voic
     if (sc?.back) onScene?.(sc.back);
     return sc;
   });
-  // a scene that failed twice borrows its neighbour
   for (let j = 0; j < scenes.length; j++) if (!scenes[j]) scenes[j] = scenes[j - 1] || scenes.find(Boolean);
-
-  /* 4. montage */
+  if (!scenes.some(Boolean)) throw new Error('Gemini не смог нарисовать ни одной сцены');
   const kinds = ['cut', 'cut', 'cut', 'whip', 'cut', 'flash'];
   const timeline = lines.map((l, j) => ({ kind: 'scene', t0: segs[j].t0, t1: segs[j].t1, scene: scenes[j], trans: kinds[j % kinds.length] }));
   const sfx = timeline.filter((x) => x.trans === 'whip').map((x) => [x.t1 - 0.3, A.whoosh()]).concat(timeline.filter((x) => x.trans === 'flash').map((x) => [x.t1 - 0.2, A.boom()]));
-  const audio = A.mix(voiceTrack, { energetic: short, sfx });
-  const job = { W, H, fps, duration, timeline, words: short ? words : [], plates: [], audio, rate: A.RATE, env: A.envelope(voiceTrack, 50) };
-  const script = lines.map((l) => l.text).join(' ');
-  return { job, plan, lines, script, style, title: plan.title || topic, voice: useEleven ? 'ElevenLabs' : 'Gemini' };
+  const audio = A.mix(voiceTrack, { mood: pack.music, sfx });
+  const job = { W, H, fps, duration, timeline, words, caption: 'shorts', plates: [], audio, rate: A.RATE, env: A.envelope(voiceTrack, 50) };
+  return { job, plan, lines, style, script: lines.map((l) => l.text).join(' '), title: plan.title || topic, voice: useEleven ? 'ElevenLabs' : 'Gemini' };
 }
 
+/* ---------------- the 3D cartoon: a production bible, stills, sound on the beats ---------------- */
+async function worldVideo({ style, pack, lang, lines, segs, words, duration, voiceTrack, W, H, fps, plan, topic, useEleven, signal, step, wait, onScene }) {
+  step('scenes', 0, lines.length, 'Режиссёр Gemini придумывает героев, места и кадры');
+  // long videos: the cast and sets are designed with the first chapter, later chapters reuse them
+  const B = 16, batches = [];
+  for (let i = 0; i < lines.length; i += B) batches.push(lines.slice(i, i + B));
+  let bible = null, done = 0;
+  for (const b of batches) {
+    let raw = null;
+    for (const fast of [false, true]) {
+      try { raw = await AI.json(biblePrompt({ topic, lines: b, lang, known: bible ? { cast: bible.cast.map((c) => c.id), sets: bible.sets.map((s) => s.id) } : null }), { fast, signal, onWait: wait, think: 'low' }); break; }
+      catch (e) { if (signal?.aborted) throw e; wait(`Режиссёр: ${e.message}${fast ? '' : ' — пробую быструю модель'}`); }
+    }
+    const part = tidyBible(bible ? { cast: [...bible.cast, ...(raw?.cast || [])], sets: [...bible.sets, ...(raw?.sets || [])], shots: raw?.shots } : raw, b);
+    if (!bible) bible = part;
+    else { const ids = new Set(bible.cast.map((c) => c.id)); bible.cast.push(...part.cast.filter((c) => !ids.has(c.id))); const sids = new Set(bible.sets.map((s) => s.id)); bible.sets.push(...part.sets.filter((s) => !sids.has(s.id))); bible.shots.push(...part.shots); }
+    done += b.length; step('scenes', done, lines.length, `План кадров: ${done} из ${lines.length}`);
+  }
+  wait(`Герои: ${bible.cast.map((c) => c.name || c.id).join(', ')} · места: ${bible.sets.length}`);
+  // timeline: a cut inside one place, a short white flash on a jump in place or time
+  const timeline = lines.map((l, j) => ({ kind: 'world', shot: bible.shots[j], t0: segs[j].t0, t1: segs[j].t1, trans: j < lines.length - 1 && bible.shots[j + 1].set !== bible.shots[j].set ? 'flash' : 'cut' }));
+  // stills before the long render (the look check), shown on the progress screen
+  try {
+    const { World } = await import('./world3d.js');
+    const sw = 270, sh = Math.round(270 * H / W), world = new World(sw, sh); world.load(structuredClone({ cast: bible.cast, sets: bible.sets }));
+    for (const [j, it] of timeline.entries()) {
+      if (j > 11) break;
+      const c = document.createElement('canvas'); c.width = sw; c.height = sh;
+      world.paint(c.getContext('2d'), structuredClone(it.shot), (it.t1 - it.t0) / 2, it.t1 - it.t0, it.t0 + 1, 0.2, null, sw, sh);
+      onScene?.(c);
+    }
+    world.dispose?.();
+  } catch (e) { wait(`Предпросмотр кадров не удался: ${e.message}`); }
+  // sound on the beats from the shot plan; the twist's sting stops the music
+  const sfx = [];
+  let stopAt = null;
+  timeline.forEach((it) => { const s = it.shot.sfx; if (s && s !== 'none' && A.SFX[s]) sfx.push([it.t0 + 0.04, A.SFX[s]()]); if (s === 'sting' && it.t0 > duration * 0.5) stopAt = it.t0; if (it.trans === 'flash') sfx.push([it.t1 - 0.25, A.whoosh(0.5)]); });
+  const audio = A.mix(voiceTrack, { mood: pack.music, sfx, stopAt });
+  const job = { W, H, fps, bitrate: 7_000_000, duration, timeline, words, caption: 'shorts', plates: [], audio, rate: A.RATE, env: A.envelope(voiceTrack, 50), world: { cast: bible.cast, sets: bible.sets } };
+  return { job, plan, lines, style, bible, script: lines.map((l) => l.text).join(' '), title: plan.title || topic, voice: useEleven ? 'ElevenLabs' : 'Gemini' };
+}
+
+/* ---------------- card styles ---------------- */
 // when Gemini can not lay out the cards, they are built from the line itself
 const ORD = { первый: 1, первая: 1, первое: 1, второй: 2, вторая: 2, второе: 2, третий: 3, третья: 3, третье: 3, четвертый: 4, четвёртый: 4, четвертая: 4, четвёртая: 4, пятый: 5, пятая: 5, first: 1, second: 2, third: 3, fourth: 4, fifth: 5 };
 const ordinal = (t) => ORD[String(t).toLowerCase().match(/^[\p{L}]+/u)?.[0]] || 0;
@@ -154,27 +203,28 @@ function localCard(text, j, total, of) {
   if (/^(минус|но|правда|однако|косяк|зато|but|however|the catch)/i.test(text)) return { card: { kind: 'stamp', text: words.slice(0, 7).join(' '), stamp: /^зато/i.test(text) ? 'ПЛЮС' : 'МИНУС' }, mood: 'smug', hot: [] };
   return { card: { kind: 'title', icon: ICONS[j % ICONS.length], text: head }, mood: ['happy', 'surprised', 'think', 'laugh'][j % 4], hot: [] };
 }
-
 // Gemini sometimes answers a list with a string or an object: every card is brought to the shape the drawing expects
 const asList = (v) => (Array.isArray(v) ? v : v == null || v === '' ? [] : [v]);
 function tidyCard(x) {
   const c = x?.card;
   if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
   const card = { ...c, kind: String(c.kind || 'title') };
+  if (card.kind === 'scene') return null;                                 // fixed pictures are never used for a topic
   for (const key of ['points', 'lines', 'comments']) if (key in card) card[key] = asList(card[key]).map((v) => (typeof v === 'object' ? JSON.stringify(v) : v));
   if ('items' in card) card.items = asList(card.items).map((v) => (v && typeof v === 'object' ? v : { text: String(v) }));
+  delete card.scene;
   return { card, mood: typeof x.mood === 'string' ? x.mood : 'happy', hot: asList(x.hot).map(String) };
 }
 
 // card styles: Gemini lays out the cards of many lines in one call, the code animates them
-async function cardVideo({ style, lang, lines, segs, words, duration, voiceTrack, short, W, H, fps, theme, plan, topic, useEleven, signal, step, wait, onScene }) {
+async function cardVideo({ style, pack, lang, lines, segs, words, duration, voiceTrack, W, H, fps, theme, plan, topic, useEleven, signal, step, wait, onScene }) {
   const B = 14, batches = [];
   for (let i = 0; i < lines.length; i += B) batches.push(lines.slice(i, i + B));
   step('scenes', 0, lines.length, 'Gemini раскладывает карточки');
   let done = 0;
   const parts = await pool(batches, 3, async (b) => {
     let cards = [];
-    for (const fast of [true, false]) {                                    // the fast model first, the main one if it fails
+    for (const fast of [true, false]) {
       try { cards = (await AI.json(F.cardsPrompt({ style, lines: b, lang }), { fast, signal, onWait: wait })).cards || []; break; }
       catch (e) { if (signal?.aborted) throw e; wait('Карточки: ' + e.message + (fast ? ' — пробую другую модель' : ' — собираю их из текста')); }
     }
@@ -183,24 +233,16 @@ async function cardVideo({ style, lang, lines, segs, words, duration, voiceTrack
   });
   const ofN = lines.filter((l) => ordinal(l.text)).length;
   const cards = parts.flat().map((c, j) => c || localCard(lines[j].text, j, lines.length, ofN));
-  const film = theme === 'film';
-  // a film keeps one continuous shot while the scene stays the same, and dissolves softly when it changes
-  const same = (j) => film && j > 0 && cards[j].card?.scene === cards[j - 1].card?.scene;
-  const timeline = lines.map((l, j) => ({ kind: 'card', theme, seed: j + 1, card: cards[j].card, mood: cards[j].mood, t0: segs[j].t0, t1: segs[j].t1, trans: film ? 'fade' : j % 4 === 3 ? 'whip' : 'cut' }));
-  for (let j = timeline.length - 1; j > 0; j--) if (same(j)) { const a = timeline[j - 1], b = timeline[j]; b.seed = a.seed; b.cont = true; a.trans = 'cut'; }
-  for (const it of timeline.slice(0, 6)) {                                 // real frames for the progress screen
+  const timeline = lines.map((l, j) => ({ kind: 'card', theme, seed: j + 1, card: cards[j].card, mood: cards[j].mood, t0: segs[j].t0, t1: segs[j].t1, trans: j % 4 === 3 ? 'whip' : 'cut' }));
+  for (const it of timeline.slice(0, 8)) {
     const c = document.createElement('canvas'); c.width = Math.round(W / 4); c.height = Math.round(H / 4);
     const x = c.getContext('2d'); x.scale(0.25, 0.25); drawCardShot(x, it, 1.6, it.t1 - it.t0, W, H, 0.3, it.t0 + 1.6); onScene?.(c);
   }
-  // the paper style shows the words; the key words of each line get the accent pill
   const norm = (w) => String(w).toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
-  const capt = theme === 'paper' || theme === 'film' ? words.map((w) => ({ ...w, hot: (cards[w.j]?.hot || []).some((h) => String(h).split(/\s+/).map(norm).includes(norm(w.w))) })) : [];
-  // sound on the beats: a pop when a card lands, a whoosh on a whip, a soft bell when a fairy-tale scene changes
-  const sfx = film
-    ? timeline.filter((x, j) => j && !x.cont).map((x) => [x.t0, A.chime()])
-    : timeline.map((x) => [x.t0 + 0.03, A.pop()]).concat(timeline.filter((x) => x.trans === 'whip').map((x) => [x.t1 - 0.3, A.whoosh()]));
-  const audio = A.mix(voiceTrack, { energetic: !film, sfx });
-  const job = { W, H, fps, bitrate: W * H >= 2e6 ? 6_000_000 : undefined, duration, timeline, words: capt, caption: theme, plates: [], audio, rate: A.RATE, env: A.envelope(voiceTrack, 50) };
+  const capt = pack.captions === 'paper' ? words.map((w) => ({ ...w, hot: (cards[w.j]?.hot || []).some((h) => String(h).split(/\s+/).map(norm).includes(norm(w.w))) })) : [];
+  const sfx = timeline.map((x) => [x.t0 + 0.03, A.pop()]).concat(timeline.filter((x) => x.trans === 'whip').map((x) => [x.t1 - 0.3, A.whoosh()]));
+  const audio = A.mix(voiceTrack, { mood: pack.music, sfx });
+  const job = { W, H, fps, bitrate: 6_000_000, duration, timeline, words: capt, caption: theme, plates: [], audio, rate: A.RATE, env: A.envelope(voiceTrack, 50) };
   return { job, plan, lines, style, script: lines.map((l) => l.text).join(' '), title: plan.title || topic, voice: useEleven ? 'ElevenLabs' : 'Gemini' };
 }
 
@@ -209,7 +251,6 @@ export function montage(job, { signal, onProgress } = {}) {
   return new Promise((ok, bad) => {
     const w = new Worker(new URL('./render-worker.js', import.meta.url), { type: 'module' });
     // nothing is transferred: the page keeps its own scenes and sound, so an interrupted montage can simply run again
-    const transfer = [];
     signal?.addEventListener('abort', () => { w.postMessage({ type: 'stop' }); setTimeout(() => w.terminate(), 500); bad(new Error('Остановлено')); }, { once: true });
     w.onmessage = (e) => {
       const m = e.data;
@@ -218,7 +259,7 @@ export function montage(job, { signal, onProgress } = {}) {
       else if (m.type === 'error') { w.terminate(); bad(new Error(m.message)); }
     };
     w.onerror = (e) => { w.terminate(); bad(new Error('Монтаж упал: ' + (e.message || 'ошибка потока'))); };
-    w.postMessage({ type: 'render', job }, transfer);
+    w.postMessage({ type: 'render', job });
   });
 }
 

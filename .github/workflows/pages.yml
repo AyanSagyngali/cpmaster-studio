@@ -20,7 +20,7 @@ jobs:
       - name: Give every file a new address per version (phones never run an old cached file)
         run: |
           V=${GITHUB_SHA::7}
-          sed -i -E "s#((from|new URL\() *'(\./|\.\./)[^'?]+\.m?js)'#\1?v=$V'#g" www/js/*.js
+          sed -i -E "s#((from|new URL\(|import\() *'(\./|\.\./)[^'?]+\.m?js)'#\1?v=$V'#g" www/js/*.js
           sed -i -E "s#src=\"js/app.js\"#src=\"js/app.js?v=$V\"#; s#href=\"app.css\"#href=\"app.css?v=$V\"#; s#__BUILD__#$V#" www/index.html
           grep -c "?v=$V" www/js/*.js www/index.html
       - uses: actions/upload-pages-artifact@v3

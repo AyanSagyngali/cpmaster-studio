@@ -233,7 +233,7 @@ ${tags}` : `${rec.title} ${tags}`;
   view.querySelectorAll('[data-r]').forEach((b) => (b.onclick = async () => {
     rec.rating = +b.dataset.r; await videos.put(rec);
     view.querySelectorAll('[data-r]').forEach((x) => x.setAttribute('aria-pressed', x === b));
-    learn(`Оценка видео «${rec.title}» (${STYLES[rec.style].name}, ${rec.kind}): ${rec.rating} из 10. Комментарий: ${$('#why').value || 'нет'}. Сценарий: ${rec.script.slice(0, 1500)}`);
+    learn(`Оценка видео «${rec.title}» (${STYLES[rec.style]?.name || rec.style}, ${rec.kind}): ${rec.rating} из 10. Комментарий: ${$('#why').value || 'нет'}. Сценарий: ${rec.script.slice(0, 1500)}`);
   }));
 }
 

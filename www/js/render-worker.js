@@ -3,6 +3,8 @@
 import { Muxer, ArrayBufferTarget } from '../vendor/mp4-muxer.mjs';
 import { drawScene, drawTransition, drawPyramid, drawCollage, drawWord, drawPlate, drawTitle } from './anim.js';
 import { drawCardShot, drawCardWord } from './cards.js';
+import { drawShortsCaption, drawWorldFx } from './fx2d.js';
+let world = null;                                                           // the 3D cartoon world, built once per video
 
 let stop = false;
 // any crash inside the thread is reported with its real reason (the page only sees «error» otherwise)
@@ -26,7 +28,8 @@ async function pickVideo(W, H, fps, bitrate) {
 }
 async function pickAudio(rate) {
   for (const c of [{ codec: 'mp4a.40.2', name: 'aac' }, { codec: 'opus', name: 'opus' }]) {
-    const cfg = { codec: c.codec, sampleRate: rate, numberOfChannels: 1, bitrate: 128000 };
+    // raw AAC frames (not ADTS): Safari may otherwise wrap every frame in ADTS headers and the MP4 plays silent
+    const cfg = { codec: c.codec, sampleRate: rate, numberOfChannels: 1, bitrate: 128000, ...(c.name === 'aac' ? { aac: { format: 'aac' } } : {}) };
     try { if ((await AudioEncoder.isConfigSupported(cfg)).supported) return [cfg, c.name]; } catch { /* next */ }
   }
   return [null, null];
@@ -46,8 +49,13 @@ async function render(job) {
   venc.configure(vcfg);
 
   // the sound first (fast): 1024-sample frames
+  let audioChunks = 0;
   if (acfg) {
-    const aenc = new AudioEncoder({ output: (c, m) => muxer.addAudioChunk(c, m), error: (e) => { failed = e; } });
+    // Safari can leave out the AAC header (AudioSpecificConfig); without it the track is silent, so it is written here
+    const FREQ = [96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350];
+    const fi = Math.max(0, FREQ.indexOf(job.rate)), asc = new Uint8Array([(2 << 3) | (fi >> 1), ((fi & 1) << 7) | (1 << 3)]);
+    const fix = (m) => (aname === 'aac' && !(m?.decoderConfig?.description?.byteLength) ? { ...m, decoderConfig: { codec: 'mp4a.40.2', sampleRate: job.rate, numberOfChannels: 1, ...(m?.decoderConfig || {}), description: asc } } : m);
+    const aenc = new AudioEncoder({ output: (c, m) => { audioChunks++; muxer.addAudioChunk(c, fix(m)); }, error: (e) => { failed = e; } });
     aenc.configure(acfg);
     const a = job.audio, step = 1024 * 8;
     for (let i = 0; i < a.length; i += step) {
@@ -56,8 +64,13 @@ async function render(job) {
       aenc.encode(ad); ad.close();
     }
     await aenc.flush();
-  }
+    if (!audioChunks) throw new Error('Телефон не смог закодировать звук (AudioEncoder ничего не выдал)');
+  } else throw new Error('Телефон не умеет кодировать звук в браузере: обнови Safari / Android System WebView');
 
+  if (job.world) {                                                          // three.js only loads for 3D videos
+    const { World } = await import('./world3d.js');
+    world = new World(W, H); world.load(job.world);
+  }
   const tl = job.timeline;
   let si = 0, wi = 0;
   const t0 = performance.now();
@@ -67,17 +80,18 @@ async function render(job) {
     const t = f / fps;
     while (si < tl.length - 1 && t >= tl[si].t1) si++;
     const amp = job.env[Math.min(job.env.length - 1, Math.floor(t * 50))] || 0;
-    drawItem(ctx, tl[si], t, amp, W, H);
+    drawItem(ctx, tl[si], t, amp, W, H, tl[si - 1]);
     const next = tl[si + 1], tr = tl[si].trans || 'cut', TD = 0.35;
     if (next && tr !== 'cut' && t > tl[si].t1 - TD) {
       const u = (t - (tl[si].t1 - TD)) / TD;
-      drawTransition(ctx, tr, () => drawItem(ctx, tl[si], t, amp, W, H), () => drawItem(ctx, next, next.t0, amp, W, H), u, W, H);
+      drawTransition(ctx, tr, () => drawItem(ctx, tl[si], t, amp, W, H, tl[si - 1]), () => drawItem(ctx, next, next.t0, amp, W, H, tl[si]), u, W, H);
     }
     // words of the Shorts, one at a time; plates (years, numbers) in long videos
     if (job.words?.length) {
       while (wi < job.words.length - 1 && t >= job.words[wi].t1) wi++;
       const w = job.words[wi];
-      if (w && t >= w.t0 && t < w.t1 + 0.15) { if (job.caption) drawCardWord(ctx, w.w, W, H, t - w.t0, job.caption, w.hot); else drawWord(ctx, w.w, W, H, t - w.t0); }
+      if (job.caption === 'shorts') drawShortsCaption(ctx, job.words, wi, t, W, H);
+      else if (w && t >= w.t0 && t < w.t1 + 0.15) { if (job.caption && job.caption !== 'none') drawCardWord(ctx, w.w, W, H, t - w.t0, job.caption, w.hot); else if (!job.caption) drawWord(ctx, w.w, W, H, t - w.t0); }
     }
     for (const p of job.plates || []) if (t >= p.t0 && t < p.t1) drawPlate(ctx, p.text, W, H, t - p.t0);
 
@@ -98,9 +112,10 @@ async function render(job) {
   self.postMessage({ type: 'done', buffer: buf, frames: total }, [buf]);
 }
 
-function drawItem(ctx, it, t, amp, W, H) {
+function drawItem(ctx, it, t, amp, W, H, prev) {
   const lt = t - it.t0, dur = it.t1 - it.t0;
-  if (it.kind === 'scene') drawScene(ctx, it.scene, lt, dur, W, H, amp);
+  if (it.kind === 'world' && world) { world.paint(ctx, it.shot, lt, dur, t, amp, prev?.shot, W, H); drawWorldFx(ctx, world, it.shot, lt, t, W, H); }
+  else if (it.kind === 'scene') drawScene(ctx, it.scene, lt, dur, W, H, amp);
   else if (it.kind === 'card') drawCardShot(ctx, it, lt, dur, W, H, amp, t);
   else if (it.kind === 'pyramid') {                               // hold, fly into the card, then the live card itself
     const k = Math.max(0, Math.min(1, (lt - 0.5) / 1.2));
