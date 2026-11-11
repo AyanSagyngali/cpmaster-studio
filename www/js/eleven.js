@@ -48,3 +48,30 @@ export async function speak(text, voice, { signal, speed = 1, stability = 0.5, l
   }
   throw new Error(lastErr);
 }
+
+// Sound effects made by ElevenLabs from a short English description ("a stadium crowd roars").
+// Costs credits (about 40 per second of sound), so callers keep a library and ask only for new sounds.
+export const SFX_COST = (seconds) => Math.ceil(seconds * 40);
+export async function soundFx(text, seconds = 2, { signal } = {}) {
+  const need = SFX_COST(seconds);
+  for (let i = 0; i < 6; i++) {
+    if (signal?.aborted) throw new Error('Остановлено');
+    const k = K.next('eleven', (x) => (x.left ?? 1e9) >= need);
+    if (!k) throw new Error('у ключей ElevenLabs мало символов для звуков');
+    let r;
+    try {
+      r = await fetch(`${API}/sound-generation`, { method: 'POST', signal, headers: { 'xi-api-key': k.key, 'Content-Type': 'application/json' }, body: JSON.stringify({ text, duration_seconds: seconds, prompt_influence: 0.55 }) });
+    } catch { await new Promise((ok) => setTimeout(ok, 1500)); continue; }
+    if (r.ok) {
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      if (k.left != null) { k.left = Math.max(0, k.left - need); k.note = `осталось ${k.left.toLocaleString('ru')} символов`; K.save(); }
+      return bytes;
+    }
+    const j = await r.json().catch(() => ({}));
+    if (j.detail?.status === 'quota_exceeded') { k.left = 0; K.save(); continue; }
+    if (r.status === 401) { K.bad(k, 'ключ не принят'); continue; }
+    if (r.status === 429) { K.cool(k, 4000, 'занят'); continue; }
+    throw new Error(`ElevenLabs звуки: ${r.status} ${(j.detail?.message || '').slice(0, 100)}`);
+  }
+  throw new Error('ElevenLabs не дал звук');
+}

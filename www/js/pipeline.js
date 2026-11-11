@@ -8,6 +8,32 @@ import * as F from './formats.js';
 import { makeScene, heroParts, PALETTE } from './scene.js';
 import { drawCardShot } from './cards.js';
 import { biblePrompt, tidyBible } from './bible.js';
+import { blobs } from './store.js';
+
+/* ---------------- the sound library: real effects made once by ElevenLabs, kept on the phone, reused ---------------- */
+const normWord = (w) => String(w || '').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+async function shotSound(sfx, budget, { signal, wait }) {
+  if (!sfx || sfx.kind === 'none') return null;
+  const key = 'sfx:' + (sfx.prompt || sfx.kind).toLowerCase().replace(/\s+/g, ' ').trim();
+  try {
+    const b = await blobs.get(key);
+    if (b) { budget.reused++; return await A.decode(b instanceof Uint8Array ? b : new Uint8Array(await b.arrayBuffer())); }
+  } catch { /* not in the library */ }
+  if (sfx.prompt && budget.made < budget.max && EL.left() - EL.SFX_COST(2) >= budget.reserve) {
+    try {
+      const bytes = await EL.soundFx(sfx.prompt, 2, { signal });
+      budget.made++; blobs.put(key, bytes).catch(() => {});
+      return await A.decode(bytes);
+    } catch (e) { if (signal?.aborted) throw e; wait(`Звук «${sfx.prompt}»: ${e.message} — беру синтез`); }
+  }
+  return A.SFX[sfx.kind]?.() || null;
+}
+// the moment a sound lands: on its word (a hair before it), else at the start of the shot
+function soundTime(sfx, j, words, seg) {
+  const target = normWord(sfx?.on);
+  if (target) { const w = words.find((x) => x.j === j && normWord(x.w) === target) || words.find((x) => x.j === j && normWord(x.w).startsWith(target.slice(0, 5))); if (w) return Math.max(seg.t0, w.t0 - 0.03); }
+  return seg.t0 + 0.05;
+}
 
 export const STAGES = [['script', 'Сценарий'], ['voice', 'Озвучка'], ['scenes', 'Кадры'], ['montage', 'Монтаж'], ['done', 'Готово']];
 const LOOKS = {
@@ -181,10 +207,16 @@ async function worldVideo({ style, pack, lang, lines, segs, words, duration, voi
     }
     world.dispose?.();
   } catch (e) { wait(`Предпросмотр кадров не удался: ${e.message}`); }
-  // sound on the beats from the shot plan; the twist's sting stops the music
+  // sound on the beats: every effect lands on its word; real sounds from the library or ElevenLabs, synth as the last resort;
+  // the voice keeps its reserve of credits (it is always more important than effects); the twist's sting stops the music
+  step('scenes', lines.length, lines.length, 'Звукорежиссёр подбирает эффекты');
+  const budget = { made: 0, reused: 0, max: lines.length > 20 ? 24 : 8, reserve: 2500 };
   const sfx = [];
   let stopAt = null;
-  timeline.forEach((it) => { const s = it.shot.sfx; if (s && s !== 'none' && A.SFX[s]) sfx.push([it.t0 + 0.04, A.SFX[s]()]); if (s === 'sting' && it.t0 > duration * 0.5) stopAt = it.t0; if (it.trans === 'flash') sfx.push([it.t1 - 0.25, A.whoosh(0.5)]); });
+  const sounds = await pool(timeline, 3, (it, j) => shotSound(it.shot.sfx, budget, { signal, wait }).then((pcm) => [soundTime(it.shot.sfx, j, words, it), pcm]));
+  for (const [t, pcm] of sounds) if (pcm) sfx.push([t, pcm]);
+  timeline.forEach((it) => { if (it.shot.sfx?.kind === 'sting' && it.t0 > duration * 0.5) stopAt = it.t0; if (it.trans === 'flash') sfx.push([it.t1 - 0.25, A.whoosh(0.5)]); });
+  wait(`Звуки: ${budget.made} новых от ElevenLabs, ${budget.reused} из библиотеки`);
   const audio = A.mix(voiceTrack, { mood: pack.music, sfx, stopAt });
   const job = { W, H, fps, bitrate: 7_000_000, duration, timeline, words, caption: 'shorts', plates: [], audio, rate: A.RATE, env: A.envelope(voiceTrack, 50), world: { cast: bible.cast, sets: bible.sets } };
   return { job, plan, lines, style, bible, script: lines.map((l) => l.text).join(' '), title: plan.title || topic, voice: useEleven ? 'ElevenLabs' : 'Gemini' };

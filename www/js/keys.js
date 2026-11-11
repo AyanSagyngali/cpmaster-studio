@@ -48,7 +48,21 @@ export function soonest(kind, want = () => true) {
   const list = of(kind).filter((k) => k.ok !== false && want(k));
   return list.length ? Math.min(...list.map((k) => k.cool)) : Infinity;
 }
-export function cool(k, ms, note) { k.cool = Date.now() + ms; if (note) k.note = note; save(); }
+export function cool(k, ms, note) { k.cool = Date.now() + ms; k.coolKind = /дн/.test(note || '') ? 'day' : 'minute'; if (note) k.note = note; save(); }
+
+/* ---------------- honest usage: Google resets the free Gemini quota at midnight Pacific time ---------------- */
+const LA = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+function laParts() { const p = Object.fromEntries(LA.formatToParts(new Date()).map((x) => [x.type, x.value])); return p; }
+export const pacificDay = () => { const p = laParts(); return `${p.year}-${p.month}-${p.day}`; };
+// when the Gemini daily quota comes back (a real moment in the phone's own time zone)
+export function geminiReset() { const p = laParts(); const passed = (+p.hour * 3600 + +p.minute * 60 + +p.second) * 1000; return Date.now() + 864e5 - passed; }
+let saveT = 0;
+// one successful Gemini request on this key today
+export function used(k) {
+  const d = pacificDay(); if (k.day !== d) { k.day = d; k.used = 0; }
+  k.used = (k.used || 0) + 1; clearTimeout(saveT); saveT = setTimeout(save, 1500);
+}
+export const usedToday = (k) => (k.day === pacificDay() ? k.used || 0 : 0);
 export function bad(k, note) { k.ok = false; k.note = note; save(); }
 
 /* ---------------- checking ---------------- */

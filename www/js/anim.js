@@ -235,7 +235,8 @@ const GAIT = { stand: [0, 0, 0], graze: [0, 0, 0], walk: [0.85, 0.34, 3], run: [
 
 // an: {kind, x, y (ground), scale, facing, color, gait, steps?} ; returns the saddle point for a rider
 export function drawAnimal(ctx, an, st, t) {
-  const A = ANIMALS[an.kind] || ANIMALS.horse, s = an.scale || 1, f = st.facing < 0 ? -1 : 1;
+  // ×1.9: at the same scale as a person (232 px tall) a horse is longer than a man is tall and the rider sits naturally
+  const A = ANIMALS[an.kind] || ANIMALS.horse, s = (an.scale || 1) * 1.9, f = st.facing < 0 ? -1 : 1;
   const g = GAIT[st.gait] || GAIT.stand;
   const lw = Math.max(2.5, 6 * s), legL = A.leg * s;
   const bob = -Math.abs(sin(t, g[0] * 2, g[2])) * s;

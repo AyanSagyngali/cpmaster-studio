@@ -4,9 +4,9 @@ import * as AI from './ai.js';
 import * as EL from './eleven.js';
 import { kv, videos, uid } from './store.js';
 import { make, montage, meta, STAGES } from './pipeline.js';
-import { STYLES } from './formats.js';
-import { drawCardShot } from './cards.js';
-import { drawFigure, ACTIONS } from './anim.js';
+import { STYLES, STYLE_ORDER, LANG_NAMES, ideasPrompt, tipsPrompt } from './formats.js';
+import { cover } from './covers.js';
+import { knowledgeHtml, generalHtml } from './knowledge.js';
 import * as SV from './save.js';
 
 const $ = (s) => document.querySelector(s);
@@ -15,7 +15,7 @@ const view = $('#view');
 let toastT;
 const toast = (m) => { const t = $('#toast'); t.textContent = m; t.className = 'on'; clearTimeout(toastT); toastT = setTimeout(() => (t.className = ''), 2600); };
 
-const S = { tab: 'home', job: null, settings: { style: 'istorik', kind: 'short', minutes: 10, lang: 'ru', voice: EL.DEFAULT_VOICE }, topic: '' };
+const S = { tab: 'home', job: null, settings: { style: 'mult', kind: 'short', minutes: 10, lang: 'ru', voices: {} }, topic: '' };
 const anims = new Set();                                                // running preview animations, stopped on every screen change
 
 function show(html, { title = 'CPMaster Studio', back = null, tabs = true } = {}) {
@@ -38,77 +38,121 @@ function show(html, { title = 'CPMaster Studio', back = null, tabs = true } = {}
 }
 const lessons = async () => (await kv.get('lessons', [])).map((l, i) => `${i + 1}. ${l}`).join('\n');
 
-/* ---------------- keys ---------------- */
+/* ---------------- keys: honest limits, nothing invented ---------------- */
+const fmtN = (n) => Math.round(n).toLocaleString('ru');
+const plural = (n, one, few, many) => { const a = Math.abs(n) % 100, b = a % 10; return a > 10 && a < 20 ? many : b === 1 ? one : b >= 2 && b <= 4 ? few : many; };
+// what one video really costs in ElevenLabs characters (from this phone's own videos; an estimate until there are some)
+async function avgCost(kind) {
+  const st = await kv.get('stats', []);
+  const xs = st.filter((x) => x.kind === kind && x.eleven > 0).slice(-10).map((x) => x.eleven);
+  return xs.length ? { v: xs.reduce((a, b) => a + b, 0) / xs.length, real: true } : { v: kind === 'short' ? 1300 : 9000, real: false };
+}
 async function keysScreen(first) {
   await K.load();
-  const list = K.all().map((k) => `<div class="key"><i class="dot ${k.ok ? 'ok' : ''}"></i><div>${k.kind === 'gemini' ? 'Gemini' : 'ElevenLabs'} <code>${esc(K.tail(k.key))}</code></div><span class="st ${k.ok ? 'ok' : ''}">${esc(k.note || '')}</span><button data-del="${esc(k.key)}" aria-label="Удалить ключ" style="color:var(--t3);padding:6px">✕</button></div>`).join('');
+  const el = K.of('eleven'), gm = K.of('gemini'), cost = await avgCost('short'), now = Date.now(), reset = K.geminiReset();
+  const resetAt = new Date(reset).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
+  const elLeft = el.filter((k) => k.ok !== false).reduce((s, k) => s + (k.left || 0), 0), shorts = Math.floor(elLeft / cost.v);
+  const gmOk = gm.filter((k) => k.ok && !(k.cool > now)).length, gmCool = gm.filter((k) => k.ok && k.cool > now).length;
+  const elRows = el.map((k) => {
+    const total = k.total || Math.max(k.left || 0, 10000), left = k.left ?? 0, frac = Math.max(0, Math.min(1, left / total)), low = frac < 0.15, n = Math.floor(left / cost.v);
+    const state = k.ok === false ? ['bad', k.note || 'не работает'] : k.ok == null ? ['', 'проверяю'] : low ? ['low', 'мало'] : ['ok', 'работает'];
+    return `<div class="key2"><div class="krow"><b>ElevenLabs</b><code>${esc(K.tail(k.key))}</code><span class="pill ${state[0]}">${esc(state[1])}</span><button data-del="${esc(k.key)}" aria-label="Удалить ключ">✕</button></div>
+      <div class="meter ${low ? 'low' : ''}"><i style="--w:${(frac * 100).toFixed(1)}%"></i></div>
+      <div class="kinfo">${fmtN(left)} из ${fmtN(total)} символов · ≈ ${n} ${plural(n, 'шортс', 'шортса', 'шортсов')}${k.reset ? ` · обновится ${new Date(k.reset).toLocaleDateString('ru', { day: 'numeric', month: 'short' })}` : ''}</div></div>`;
+  }).join('');
+  const gmRows = gm.map((k) => {
+    const cool = k.cool > now, day = cool && k.coolKind === 'day';
+    const state = k.ok === false ? ['bad', k.note || 'не работает'] : k.ok == null ? ['', 'проверяю'] : day ? ['low', 'дневной лимит'] : cool ? ['low', 'минутный лимит'] : ['ok', 'работает'];
+    const when = day ? ` · снова работает в ${resetAt}` : cool ? ` · освободится через <span data-cd="${k.cool}"></span>` : '';
+    return `<div class="key2"><div class="krow"><b>Gemini</b><code>${esc(K.tail(k.key))}</code><span class="pill ${state[0]}">${esc(state[1])}</span><button data-del="${esc(k.key)}" aria-label="Удалить ключ">✕</button></div>
+      <div class="kinfo">сегодня ${K.usedToday(k)} ${plural(K.usedToday(k), 'запрос', 'запроса', 'запросов')}${when}</div></div>`;
+  }).join('');
   await show(`${first ? '<p class="note" style="margin:8px 4px 14px;font-size:15px;color:var(--t2)">Чтобы начать, вставь ключи Google AI Studio (Gemini) и ElevenLabs. Можно сразу много, в любом виде — программа сама найдёт и проверит каждый.</p>' : ''}
-    <textarea id="paste" rows="5" placeholder="Вставь сюда ключи: AIza… / AQ.… для Gemini, sk_… для ElevenLabs"></textarea>
-    <div style="margin-top:10px"><button class="btn" id="addKeys">Добавить и проверить</button></div>
-    <h2>Ключи (${K.all().length})</h2><div class="card">${list || '<p class="note" style="margin:0">Пока нет ключей.</p>'}</div>
-    <p class="note">Ключи хранятся только на этом телефоне. Если на ключе кончился лимит, программа сразу берёт следующий.</p>
+    <div class="sum"><div><b>${fmtN(elLeft)}</b><span>символов ElevenLabs</span><small>≈ ${shorts} ${plural(shorts, 'шортс', 'шортса', 'шортсов')} ${cost.real ? 'по твоим роликам' : '(оценка)'}</small></div><div><b>${gmOk}</b><span>ключей Gemini работают</span><small>${gmCool ? `${gmCool} на лимите` : 'все свободны'}</small></div></div>
+    <textarea id="paste" rows="4" placeholder="Вставь сюда ключи: AIza… / AQ.… для Gemini, sk_… для ElevenLabs"></textarea>
+    <div style="margin-top:10px" class="row"><button class="btn" id="addKeys">Добавить и проверить</button><button class="btn ghost" id="recheck">Обновить лимиты</button></div>
+    ${el.length ? `<h2>ElevenLabs (${el.length})</h2><div class="card">${elRows}</div>` : ''}
+    ${gm.length ? `<h2>Gemini (${gm.length})</h2><div class="card">${gmRows}</div>` : ''}
+    ${!el.length && !gm.length ? '<div class="card"><p class="note" style="margin:0">Пока нет ключей.</p></div>' : ''}
+    <p class="note">Остаток символов ElevenLabs показывает сам ElevenLabs. Остаток Gemini Google не показывает, поэтому приложение считает запросы само; бесплатные лимиты Gemini обновляются каждый день в ${resetAt}. Ключи хранятся только на этом телефоне.</p>
     ${!first ? '' : `<div style="margin-top:16px"><button class="btn ghost" id="go" ${K.ready() ? '' : 'disabled'}>Дальше</button></div>`}`,
   { title: 'Ключи', back: first ? null : () => tab('settings'), tabs: !first });
+  const tick = () => view.querySelectorAll('[data-cd]').forEach((x) => { const s2 = Math.max(0, Math.ceil((+x.dataset.cd - Date.now()) / 1000)); x.textContent = s2 > 90 ? `${Math.ceil(s2 / 60)} мин` : `${s2} с`; });
+  tick(); const iv = setInterval(tick, 1000); anims.add(() => clearInterval(iv));
   $('#addKeys').onclick = async () => {
     const r = await K.add($('#paste').value);
     if (!r.found) return toast('Ключей не нашёл. Скопируй их целиком.');
     toast(`Найдено ${r.found}, новых ${r.added}. Проверяю…`);
     await K.checkAll(); keysScreen(first);
   };
-  view.querySelectorAll('[data-del]').forEach((b) => (b.onclick = async () => { await K.remove(b.dataset.del); keysScreen(first); }));
+  $('#recheck').onclick = async () => { toast('Проверяю все ключи…'); await K.checkAll(); keysScreen(first); };
+  view.querySelectorAll('[data-del]').forEach((b2) => (b2.onclick = async () => { await K.remove(b2.dataset.del); keysScreen(first); }));
   if (first) $('#go').onclick = () => tab('home');
 }
 
-/* ---------------- home: style, topic, length ---------------- */
-function styleCard(id, st) {
-  return `<button class="style" data-style="${id}" aria-pressed="${S.settings.style === id}"><canvas width="240" height="300"></canvas><b>${esc(st.name)}</b><small>${esc(st.about)}</small></button>`;
-}
-function previewFigure(canvas, style) {                                 // a live stick figure on each style card
-  const ctx = canvas.getContext('2d'); let raf, t0 = performance.now();
-  if (STYLES[style].engine === 'cards' || style === 'auto') {             // live cards and scenes, the same drawing as in the video
-    const scenes = ['pond', 'lighthouse', 'underwater', 'harbor', 'desk'].map((scene) => ({ kind: 'scene', scene, label: '</> code' }));
-    const demo = STYLES[style].theme === 'film' ? scenes : style === 'auto' ? [scenes[0], { kind: 'number', label: 'Подписка', value: '1990', suffix: ' ₽' }, scenes[3], { kind: 'chart', title: 'Рост', points: [1, 2, 2, 4, 7, 12], value: '9211' }] : [scenes[0], { kind: 'number', label: 'Подписка', value: '1990', suffix: ' ₽', sub: 'а можно бесплатно' }, { kind: 'list', items: [{ icon: '🎙️', text: 'Свой голос', mark: 'check' }, { icon: '🤝', text: 'С разрешения', mark: 'check' }, { icon: '🚫', text: 'Чужой голос', mark: 'cross' }] }, { kind: 'step', n: 2, of: 4, icon: '🎤', title: 'F5-TTS', stat: '★ 15 537' }];
-    const moods = ['surprised', 'happy', 'smug'];
-    const frame = (now) => {
-      const t = Math.max(0, (now - t0) / 1000), i = Math.floor(t / 3) % demo.length, theme = style === 'auto' ? (i % 2 ? 'mascot' : 'paper') : STYLES[style].theme;
-      ctx.setTransform(240 / 720, 0, 0, 300 / 900, 0, 0);
-      drawCardShot(ctx, { theme, card: demo[i], mood: moods[i % moods.length] }, t % 3, 3, 720, 900, 0.25 + 0.25 * Math.sin(t * 9), t);
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      raf = requestAnimationFrame(frame);
-    };
-    raf = requestAnimationFrame(frame); anims.add(() => cancelAnimationFrame(raf)); return;
-  }
-  const dark = style === 'razgon';
-  const frame = (now) => {
-    const t = Math.max(0, (now - t0) / 1000);                           // the first frame can start before t0
-    ctx.fillStyle = dark ? '#151a2e' : '#ece0c3'; ctx.fillRect(0, 0, 240, 300);
-    if (dark) { const g = ctx.createRadialGradient(170, 90, 5, 170, 90, 150); g.addColorStop(0, 'rgba(242,165,65,.55)'); g.addColorStop(1, 'rgba(242,165,65,0)'); ctx.fillStyle = g; ctx.fillRect(0, 0, 240, 300); }
-    ctx.fillStyle = dark ? '#0d0d12' : '#d6c19a'; ctx.fillRect(0, 250, 240, 50);
-    const act = ['talk', 'wave', 'think', 'cheer', 'point'][Math.floor(t / 2.5) % 5];
-    drawFigure(ctx, { x: 120, y: 252, scale: 0.85, facing: 1, pose: ACTIONS[act](t, 1), mood: 'happy', outfit: dark ? { color: '#d64a33' } : { color: '#c4683f', belt: '#5a3d2b' }, silhouette: false }, t, 0);
-    raf = requestAnimationFrame(frame);
-  };
-  raf = requestAnimationFrame(frame);
-  anims.add(() => cancelAnimationFrame(raf));
-}
-
+/* ---------------- home: the gallery of styles ---------------- */
 async function home() {
   if (S.job) return progressScreen();
-  const st = S.settings;
-  await show(`<div class="styles">${Object.entries(STYLES).map(([id, s]) => styleCard(id, s)).join('')}</div>
-    <h2>Тема</h2><textarea id="topic" rows="2" placeholder="Например: ${({ razgon: 'Что если бы ты не спал месяц?', paper: 'Почему мы откладываем дела и как это обойти', mascot: '4 бесплатные нейросети вместо платной подписки', film: 'Сказка на ночь про маленького кита, который боялся темноты', auto: 'Любая тема, ИИ сам выберет стиль' })[st.style] || 'Как жил простой воин в армии Чингисхана'}">${esc(S.topic)}</textarea>
-    <h2>Формат</h2><div class="seg" id="kind"><button data-v="short" aria-pressed="${st.kind === 'short'}">Шортс · 1 мин</button><button data-v="long" aria-pressed="${st.kind === 'long'}">Лонг</button></div>
+  const el = EL.left(), cost = await avgCost('short');
+  await show(`<div class="gallery">${STYLE_ORDER.map((id) => `<button class="scard" data-style="${id}"><canvas width="360" height="450"></canvas><div class="sname"><b>${esc(STYLES[id].name)}</b><small>${esc(STYLES[id].tagline)}</small></div></button>`).join('')}</div>
+    <button class="item" id="limits" style="margin-top:14px"><div><b>Лимиты ключей</b><span>ElevenLabs ${fmtN(el)} символов · ≈ ${Math.floor(el / cost.v)} шортсов · Gemini ${K.of('gemini').filter((k) => k.ok).length} ключей</span></div></button>`, { title: 'Выбери стиль' });
+  view.querySelectorAll('.scard').forEach((b2) => { anims.add(cover(b2.querySelector('canvas'), b2.dataset.style)); b2.onclick = () => styleScreen(b2.dataset.style); });
+  $('#limits').onclick = () => keysScreen(false);
+}
+
+/* ---------------- one style: topic, ideas, AI advice, format, language, voice ---------------- */
+const ALL_VOICES = () => [...EL.VOICES, { id: 'j9K9HnBcmgA6xNWqjlX0', name: 'Emin — эпичный рассказчик' }];
+const EXAMPLES = { mult: 'Что если я выиграю чемпионат мира по футболу', razgon: 'Что если бы ты не спал месяц?', istorik: 'Ты — караванщик на Шёлковом пути, 1350 год', paper: 'Почему мы откладываем дела и как это обойти', mascot: '4 бесплатные нейросети вместо платной подписки', auto: 'Любая тема — ИИ сам выберет стиль' };
+async function styleScreen(id) {
+  const st = S.settings; st.style = id; kv.set('settings', st);
+  const pack = STYLES[id], voices = ALL_VOICES(), mine = st.voices?.[id] || '';
+  await show(`<div class="shero"><canvas width="720" height="560"></canvas><div class="sname"><b>${esc(pack.name)}</b><small>${esc(pack.about)}</small></div></div>
+    <h2>Тема</h2><textarea id="topic" rows="3" placeholder="Например: ${esc(EXAMPLES[id] || '')}">${esc(S.topic)}</textarea>
+    <div class="row" style="margin-top:8px"><button class="btn ghost" id="ideas">🎲 Идеи</button><button class="btn ghost" id="tips">💡 Совет ИИ</button></div>
+    <div id="out"></div>
+    <h2>Формат</h2><div class="seg" id="kind"><button data-v="short" aria-pressed="${st.kind === 'short'}">Шортс · до 1 мин</button><button data-v="long" aria-pressed="${st.kind === 'long'}">Лонг</button></div>
     <div id="mins" style="margin-top:8px" ${st.kind === 'long' ? '' : 'hidden'}><div class="seg">${[5, 10, 15].map((m) => `<button data-m="${m}" aria-pressed="${st.minutes === m}">${m} мин</button>`).join('')}</div></div>
-    <h2>Язык</h2><div class="seg" id="lang"><button data-l="ru" aria-pressed="${st.lang === 'ru'}">Русский</button><button data-l="en" aria-pressed="${st.lang === 'en'}">English</button></div>
+    <h2>Язык</h2><div class="seg" id="lang">${Object.entries(LANG_NAMES).map(([k2, n]) => `<button data-l="${k2}" aria-pressed="${st.lang === k2}">${n}</button>`).join('')}</div>
+    <h2>Голос</h2><select id="voice"><option value="">Голос стиля${pack.voice ? ` (${esc(voices.find((v) => v.id === pack.voice.el)?.name.split(' —')[0] || '')})` : ''}</option>${voices.map((v) => `<option value="${v.id}" ${mine === v.id ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}</select>
+    <details class="kb"><summary>Что умеет стиль</summary>${knowledgeHtml(id)}</details>
     <div style="margin-top:18px"><button class="btn" id="start">Запустить</button></div>
-    <p class="note n">Gemini: ${K.of('gemini').filter((k) => k.ok).length} ключей · ElevenLabs: ${EL.left().toLocaleString('ru')} символов. ${AI.drawsForSure() ? 'Картинки: нейросеть.' : 'Сцены: анимация Gemini.'}</p>`);
-  view.querySelectorAll('.style').forEach((b) => { previewFigure(b.querySelector('canvas'), b.dataset.style); b.onclick = () => { st.style = b.dataset.style; kv.set('settings', st); view.querySelectorAll('.style').forEach((x) => x.setAttribute('aria-pressed', x === b)); }; });
-  const seg = (sel, attr, set) => view.querySelectorAll(`${sel} [data-${attr}]`).forEach((b) => (b.onclick = () => { set(b.dataset[attr]); kv.set('settings', st); b.parentElement.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', x === b)); }));
+    <p class="note n" id="cost"></p>`, { title: pack.name, back: home });
+  anims.add(cover(view.querySelector('.shero canvas'), id));
+  const seg = (sel, attr, set) => view.querySelectorAll(`${sel} [data-${attr}]`).forEach((b2) => (b2.onclick = () => { set(b2.dataset[attr]); kv.set('settings', st); b2.parentElement.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', x === b2)); showCost(); }));
+  const showCost = async () => { const c = await avgCost(st.kind), el = EL.left(); $('#cost').textContent = `Один ${st.kind === 'short' ? 'шортс' : 'лонг'} ≈ ${fmtN(c.v)} символов ElevenLabs${c.real ? '' : ' (оценка)'} · сейчас есть ${fmtN(el)}. ${el < c.v ? 'Не хватит — озвучит Gemini.' : ''}`; };
   seg('#kind', 'v', (v) => { st.kind = v; $('#mins').hidden = v !== 'long'; });
   seg('#mins', 'm', (v) => (st.minutes = +v));
   seg('#lang', 'l', (v) => (st.lang = v));
+  showCost();
+  $('#voice').onchange = (e) => { st.voices = { ...(st.voices || {}), [id]: e.target.value }; kv.set('settings', st); };
   $('#topic').oninput = (e) => (S.topic = e.target.value);
+  const busy = (b2, on, label) => { b2.disabled = on; b2.textContent = on ? 'Думаю…' : label; };
+  $('#ideas').onclick = async (e) => {
+    const b2 = e.currentTarget; busy(b2, true);
+    try {
+      const r = await AI.json(ideasPrompt({ style: id === 'auto' ? 'mult' : id, lang: st.lang, hint: S.topic.trim(), lessons: await lessons() }), { fast: true });
+      const ideas = (Array.isArray(r.ideas) ? r.ideas : []).filter((x) => x && x.title).slice(0, 8);
+      $('#out').innerHTML = ideas.length ? `<div class="ideas">${ideas.map((x, i) => `<button class="idea" data-i="${i}"><b>${esc(x.title)}</b>${x.hook ? `<span>«${esc(x.hook)}»</span>` : ''}${x.twist ? `<small>Поворот: ${esc(x.twist)}</small>` : ''}${x.truth ? `<em>${esc(x.truth)}</em>` : ''}</button>`).join('')}</div>` : '<p class="note">Gemini не прислал идей, попробуй ещё раз.</p>';
+      view.querySelectorAll('.idea').forEach((x) => (x.onclick = () => { S.topic = ideas[+x.dataset.i].title; $('#topic').value = S.topic; toast('Тема выбрана'); view.querySelectorAll('.idea').forEach((y) => y.setAttribute('aria-pressed', y === x)); }));
+    } catch (err) { toast('Gemini: ' + err.message); }
+    busy(b2, false, '🎲 Идеи');
+  };
+  $('#tips').onclick = async (e) => {
+    const b2 = e.currentTarget; busy(b2, true);
+    try {
+      const r = await AI.json(tipsPrompt({ style: id, topic: S.topic.trim(), lang: st.lang, kind: st.kind, voices }), { fast: true });
+      const v = voices.find((x) => x.id === r.voice);
+      $('#out').innerHTML = `<div class="card tips">${r.topic ? `<div class="tip-topic">${esc(r.topic)}</div>` : ''}<div class="kinfo">${r.kind === 'long' ? `Лонг ${r.minutes || 10} мин` : 'Шортс'}${v ? ` · ${esc(v.name.split(' —')[0])}` : ''}</div>${r.why ? `<p class="note" style="margin:6px 0">${esc(r.why)}</p>` : ''}<ul>${(Array.isArray(r.tips) ? r.tips : []).slice(0, 3).map((t2) => `<li>${esc(t2)}</li>`).join('')}</ul><button class="btn small" id="apply">Применить совет</button></div>`;
+      $('#apply').onclick = () => { if (r.topic) S.topic = String(r.topic); if (r.kind === 'short' || r.kind === 'long') st.kind = r.kind; if ([5, 10, 15].includes(+r.minutes)) st.minutes = +r.minutes; if (v) st.voices = { ...(st.voices || {}), [id]: v.id }; kv.set('settings', st); toast('Совет применён'); styleScreen(id); };
+    } catch (err) { toast('Gemini: ' + err.message); }
+    busy(b2, false, '💡 Совет ИИ');
+  };
   $('#start').onclick = () => start();
+}
+
+/* ---------------- the knowledge base ---------------- */
+async function knowledgeScreen() {
+  await show(`${generalHtml()}${STYLE_ORDER.map((id) => `<details class="kb"><summary>${esc(STYLES[id].name)}</summary>${knowledgeHtml(id)}</details>`).join('')}`, { title: 'База знаний', back: () => tab('settings') });
 }
 
 /* ---------------- the job ---------------- */
@@ -119,10 +163,11 @@ async function start() {
   const ctl = new AbortController(), st = { ...S.settings };
   const job = S.job = { ctl, topic, st, stage: 'script', counts: {}, text: '', thumbs: [], log: [], started: Date.now(), preview: null, frame: 0, total: 0, fps: 0 };
   let lock; try { lock = await navigator.wakeLock?.request('screen'); } catch { /* no wake lock */ }
+  const elBefore = EL.left();
   progressScreen();
   const upd = () => { if (S.tab === 'home' && S.job === job) paintProgress(); };
   try {
-    const r = await make({ style: st.style, topic, kind: st.kind, minutes: st.minutes, lang: st.lang, voice: st.voice, lessons: await lessons(), signal: ctl.signal,
+    const r = await make({ style: st.style, topic, kind: st.kind, minutes: st.minutes, lang: st.lang, voice: st.voices?.[st.style] || '', lessons: await lessons(), signal: ctl.signal,
       onStep: (s, d, t, x) => { job.stage = s; job.counts[s] = [d, t]; job.text = x; upd(); },
       // a small COPY: the scene bitmaps are handed over to the montage thread later and stop existing here
       onScene: (b) => { const c = document.createElement('canvas'); c.height = 184; c.width = Math.round(184 * b.width / b.height); c.getContext('2d').drawImage(b, 0, 0, c.width, c.height); job.thumbs.push(c); upd(); },
@@ -151,6 +196,7 @@ async function start() {
     let m = {}; try { const x = await Promise.race([meta({ style: st.style, topic, title: r.title, script: r.script, lang: st.lang }), new Promise((ok) => setTimeout(() => ok(null), 20000))]); if (x && typeof x === 'object') m = x; } catch { /* no title help */ }
     let thumb = ''; try { thumb = job.thumbs[0] ? await thumbData(job.thumbs[0]) : ''; } catch { /* no thumbnail */ }
     const rec = { id, created: Date.now(), topic, title: String(m.title || r.title || topic), description: String(m.description || ''), tags: Array.isArray(m.tags) ? m.tags.map(String) : [], style: r.style || st.style, kind: st.kind, seconds: Math.round(r.job.duration), voice: r.voice, ref, thumb, rating: 0, script: r.script, took: Math.round((Date.now() - job.started) / 1000) };
+    try { const stt = await kv.get('stats', []); stt.push({ kind: st.kind, style: rec.style, eleven: Math.max(0, elBefore - EL.left()), at: Date.now() }); await kv.set('stats', stt.slice(-40)); } catch { /* stats are optional */ }
     try { await videos.put(rec); } catch (e) { job.log.push('История не записалась: ' + e.message); rec.note = 'Не сохранилось в историю: ' + e.message + '. Нажми «Скачать», чтобы не потерять видео.'; }
     if (job.log.length && !rec.note && ref.kind === 'mem') rec.note = job.log.slice(-1)[0];
     S.job = null;
@@ -284,15 +330,16 @@ async function history() {
 
 /* ---------------- settings ---------------- */
 async function settings() {
-  const st = S.settings;
-  await show(`<button class="item" id="keys"><div><b>Ключи</b><span>Gemini ${K.of('gemini').filter((k) => k.ok).length} · ElevenLabs ${K.of('eleven').filter((k) => k.ok).length} (${EL.left().toLocaleString('ru')} символов)</span></div></button>
-    <h2>Голос ElevenLabs</h2><select id="voice">${EL.VOICES.map((v) => `<option value="${v.id}" ${st.voice === v.id ? 'selected' : ''}>${esc(v.name)}</option>`).join('')}<option value="j9K9HnBcmgA6xNWqjlX0" ${st.voice === 'j9K9HnBcmgA6xNWqjlX0' ? 'selected' : ''}>Emin — эпичный рассказчик (из библиотеки)</option></select>
-    <p class="note">Если у ElevenLabs кончатся символы, всё видео озвучит Gemini — один голос на ролик.</p>
-    <h2>Память</h2><button class="btn ghost" id="cache">Очистить кэш и историю</button>
+  await show(`<button class="item" id="keys"><div><b>Ключи и лимиты</b><span>Gemini ${K.of('gemini').filter((k) => k.ok).length} · ElevenLabs ${EL.left().toLocaleString('ru')} символов</span></div></button>
+    <button class="item" id="kb" style="margin-top:8px"><div><b>База знаний</b><span>Что умеет каждый стиль и как он устроен</span></div></button>
+    <h2>Память</h2><button class="btn ghost" id="cache">Очистить видео и чат</button>
+    <button class="btn ghost" id="sfx" style="margin-top:8px">Очистить библиотеку звуков</button>
+    <p class="note">Голос выбирается на экране каждого стиля. Если у ElevenLabs кончатся символы, всё видео озвучит Gemini — один голос на ролик.</p>
     <p class="note n" id="ver2"></p>`, { title: 'Настройки' });
   $('#keys').onclick = () => keysScreen(false);
-  $('#voice').onchange = (e) => { st.voice = e.target.value; kv.set('settings', st); toast('Голос сохранён'); };
-  $('#cache').onclick = async () => { const list = await videos.all(); for (const v of list) { await SV.remove(v.ref); await videos.del(v.id); } await kv.set('chat', []); toast('Готово, память освобождена'); };
+  $('#kb').onclick = () => knowledgeScreen();
+  $('#cache').onclick = async () => { if (!confirm('Удалить все видео и переписку?')) return; const list = await videos.all(); for (const v of list) { await SV.remove(v.ref); await videos.del(v.id); } await kv.set('chat', []); toast('Готово, память освобождена'); };
+  $('#sfx').onclick = async () => { if (!confirm('Удалить сохранённые звуки? Их придётся создавать заново.')) return; const { blobs } = await import('./store.js'); const all = await blobs.keys?.(); if (all) for (const k of all) if (String(k).startsWith('sfx:')) await blobs.del(k); toast('Библиотека звуков очищена'); };
   try { const v = await (await fetch('version.json', { cache: 'no-store' })).json(); $('#ver2').textContent = `Версия ${v.version}`; } catch { /* local */ }
 }
 

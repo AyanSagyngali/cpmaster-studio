@@ -60,6 +60,7 @@ async function call(kind, body, { signal, tries = 40, onWait, think } = {}) {
       lastErr = 'нет интернета'; await sleep(2000, signal); continue;
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); }
     if (r.ok) {
+      K.used(k);
       const parts = j.candidates?.[0]?.content?.parts || [];
       if (kind === 'image' || kind === 'tts') {
         const d = parts.find((p) => p.inlineData)?.inlineData;

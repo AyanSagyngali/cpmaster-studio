@@ -59,9 +59,16 @@ function drawIstorik(ctx, t, W, H) {
   ctx.strokeStyle = '#1b1714'; ctx.lineWidth = 3; ctx.fillStyle = '#c9a26a';
   ctx.beginPath(); ctx.moveTo(0, H * 0.62); ctx.quadraticCurveTo(W * 0.3, H * 0.52, W * 0.55, H * 0.6); ctx.quadraticCurveTo(W * 0.8, H * 0.66, W, H * 0.57); ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath(); ctx.fill(); ctx.stroke();
   ctx.fillStyle = '#b98a52'; for (const [x, w2, h2] of [[0.12, 0.08, 0.12], [0.22, 0.05, 0.18], [0.29, 0.08, 0.1]]) { ctx.fillRect(W * x, H * (0.58 - h2), W * w2, H * h2); ctx.strokeRect(W * x, H * (0.58 - h2), W * w2, H * h2); }
-  const x = ((t * 40) % (W + 160)) - 80;
-  const seat = drawAnimal(ctx, { kind: 'horse', color: '#8a5a3b', scale: W / 420 }, { x, y: H * 0.86, facing: 1, gait: 'run' }, t);
-  drawFigure(ctx, { x: seat[0], y: seat[1], scale: W / 380, facing: 1, pose: ACTIONS.ride(t), seat: true, outfit: { color: '#a8231f', belt: '#5a3d2b' } }, t, 0);
+  // a rider with a banner gallops in from one edge and out at the other
+  const x = ((t * 55) % (W + 320)) - 160;
+  const seat = drawAnimal(ctx, { kind: 'horse', color: '#8a5a3b', scale: W / 420 }, { x, y: H * 0.9, facing: 1, gait: 'run' }, t);
+  const rs = W / 420;
+  drawFigure(ctx, { x: seat[0], y: seat[1], scale: rs, facing: 1, pose: ACTIONS.ride(t), seat: true, outfit: { color: '#a8231f', belt: '#5a3d2b' } }, t, 0);
+  ctx.strokeStyle = '#1b1714'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(seat[0] - 6 * rs, seat[1] - 230 * rs); ctx.lineTo(seat[0] - 6 * rs, seat[1] - 40 * rs); ctx.stroke();
+  ctx.fillStyle = '#a8231f'; ctx.beginPath(); ctx.moveTo(seat[0] - 6 * rs, seat[1] - 230 * rs);
+  for (let i = 0; i <= 6; i++) ctx.lineTo(seat[0] - 6 * rs - i * 14 * rs, seat[1] - 230 * rs + Math.sin(t * 9 + i * 0.8) * 5 * rs);
+  for (let i = 6; i >= 0; i--) ctx.lineTo(seat[0] - 6 * rs - i * 14 * rs, seat[1] - 180 * rs + Math.sin(t * 9 + i * 0.8) * 5 * rs);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
 }
 
 const CARD_DEMO = {

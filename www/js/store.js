@@ -44,6 +44,7 @@ export const blobs = {
   get: (k) => tx('blobs', 'readonly', (s) => s.get(k)),
   put: (k, b) => tx('blobs', 'readwrite', (s) => s.put(b, k)),
   del: (k) => tx('blobs', 'readwrite', (s) => s.delete(k)),
+  keys: () => tx('blobs', 'readonly', (s) => s.getAllKeys()),
   clear: () => tx('blobs', 'readwrite', (s) => s.clear()),
 };
 
