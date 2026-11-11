@@ -107,9 +107,10 @@ ${masterOf(style)}
 Topic: ${topic}. ${short ? 'This is a Short: every second counts.' : 'This is one chapter of a long video.'}
 THE DRAFT (${lines.length} lines):
 ${lines.map((l, i) => `${i + 1}. ${l.text}`).join('\n')}
-First check it: every fact true and precise (remove or soften anything doubtful), no nonsense words, the topic and premise of the owner kept, every line follows from the previous one ("but" / "so"), every line is something we can SEE. Then rewrite it ${LANG[lang]} so it is gripping and follows the structure: sharpen the hook, replace every vague line with a specific fact, image or action, cut filler, fix rhythm, keep facts true. Keep EXACTLY ${lines.length} lines and roughly the same length of each line. Keep each line's "idea" (English, what we see), make it literal and concrete.
+First AUDIT it, line by line, into "audit": every number, sum, price, percentage, weight, date, law or rule — is it a real, well-known fact you are SURE of? Invented sums, prices, valuations, tax rates, fines, quantities → remove them or replace with a fact you are sure of (e.g. the FIFA World Cup trophy: 6.175 kg of 18-carat gold, 36.8 cm tall; the winners get a gold-plated bronze replica, FIFA keeps the original). Also flag: nonsense or random new things in the ending, a line that does not follow from the previous one ("but" / "so"), the owner's premise lost, a line we cannot SEE. Then rewrite it ${LANG[lang]} so it is gripping and follows the structure: sharpen the hook, replace every vague line with a specific fact, image or action, cut filler, fix rhythm, keep facts true. Keep EXACTLY ${lines.length} lines and roughly the same length of each line. Keep each line's "idea" (English, what we see), make it literal and concrete.
+The twist / payoff grows out of the chain of events itself (a callback to something already shown), never a random new object, number or joke. ${lang === 'ru' ? 'Address the viewer as «ты» (never «вы»).' : ''}
 ${CHECK(short)}
-Return JSON {"lines": [{"text": str, "idea": str}]}.${lessonsBlock(lessons)}`;
+Return JSON {"audit": [str], "lines": [{"text": str, "idea": str}]}.${lessonsBlock(lessons)}`;
 }
 
 /* ---------------- the randomizer: ideas that fit the style ---------------- */

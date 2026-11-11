@@ -33,10 +33,12 @@ function inkMat() { return INKMAT || (INKMAT = new T.MeshBasicMaterial({ color: 
 
 /* ---------------- painted textures (flat colour with dark seams, like a painted set) ---------------- */
 const texCache = new Map();
-export function paint(kind, base = '#888888', text = '') {
-  const key = `${kind}|${base}|${text}`;
+export function paint(kind, base = '#888888', text = '', aspect = 1) {
+  const A = Math.max(0.25, Math.min(4, +aspect || 1)), key = `${kind}|${base}|${text}|${A.toFixed(2)}`;
   if (texCache.has(key)) return texCache.get(key);
-  const S = 256, c = new OffscreenCanvas(S, S), g = c.getContext('2d'), r = rng(hashStr(key));
+  // writing gets a canvas of the sign's own shape, so letters are never stretched or cut
+  const S = 256, LW = kind === 'label' ? Math.round(S * Math.max(1, A)) : S, LH = kind === 'label' ? Math.round(S / Math.min(1, A)) : S;
+  const c = new OffscreenCanvas(LW, LH), g = c.getContext('2d'), r = rng(hashStr(key));
   const b = col(base, '#888888'), hex = `#${b.getHexString()}`;
   const tint = (k) => { const x = b.clone(); x.offsetHSL(0, 0, k); return `#${x.getHexString()}`; };
   g.fillStyle = hex; g.fillRect(0, 0, S, S);
@@ -74,18 +76,32 @@ export function paint(kind, base = '#888888', text = '') {
   } else if (kind === 'stars') {
     g.fillStyle = '#05060f'; g.fillRect(0, 0, S, S); for (let i = 0; i < 160; i++) { g.fillStyle = `rgba(255,255,255,${0.4 + r() * 0.6})`; g.fillRect(r() * S, r() * S, 1.5, 1.5); }
   } else if (kind === 'label') {                                           // writing on a sign, a screen, a newspaper
-    g.fillStyle = hex; g.fillRect(0, 0, S, S); g.fillStyle = col(base, '#888').getHSL({}).l > 0.5 ? '#2b1b2e' : '#ffffff';
+    g.fillStyle = hex; g.fillRect(0, 0, LW, LH); g.fillStyle = col(base, '#888').getHSL({}).l > 0.5 ? '#2b1b2e' : '#ffffff';
     g.textAlign = 'center'; g.textBaseline = 'middle';
-    const words = String(text).split(/\s+/); const lines = []; let cur = '';
-    g.font = 'bold 44px sans-serif';
-    for (const w of words) { const t2 = cur ? cur + ' ' + w : w; if (g.measureText(t2).width > S - 24 && cur) { lines.push(cur); cur = w; } else cur = t2; }
-    if (cur) lines.push(cur);
-    const fs = Math.min(64, Math.floor((S - 30) / Math.max(1, lines.length) / 1.2)); g.font = `bold ${fs}px sans-serif`;
-    lines.slice(0, 5).forEach((l, i) => g.fillText(l, S / 2, S / 2 + (i - (Math.min(5, lines.length) - 1) / 2) * fs * 1.15));
+    const { fs, lines } = fitText(g, text, LW - 28, LH - 24);
+    g.font = `bold ${fs}px sans-serif`;
+    lines.forEach((l, i) => g.fillText(l, LW / 2, LH / 2 + (i - (lines.length - 1) / 2) * fs * 1.15));
   }
   const tx = new T.CanvasTexture(c); tx.wrapS = tx.wrapT = T.RepeatWrapping; tx.colorSpace = T.SRGBColorSpace; tx.anisotropy = 2;
   texCache.set(key, tx); return tx;
 }
+
+// the biggest font at which the words, wrapped, fit the box (no line wider than the box, no line cut off)
+export function fitText(g, text, w, h) {
+  const words = String(text).split(/\s+/).filter(Boolean);
+  for (let fs = 110; fs > 8; fs -= 2) {
+    g.font = `bold ${fs}px sans-serif`;
+    const lines = []; let cur = '';
+    for (const wd of words) { const t2 = cur ? cur + ' ' + wd : wd; if (g.measureText(t2).width > w && cur) { lines.push(cur); cur = wd; } else cur = t2; }
+    if (cur) lines.push(cur);
+    if (lines.length * fs * 1.15 <= h && lines.every((l) => g.measureText(l).width <= w)) return { fs, lines };
+  }
+  return { fs: 8, lines: [words.join(' ')] };
+}
+
+// small things keep their real size whatever size the plan asks for (a football is never as big as a man)
+const REAL = { ball: { w: 0.11 }, trophy: { w: 0.42 } };
+export const realSize = (o) => (REAL[o.type] ? { ...o, ...REAL[o.type], scale: 1, h: undefined } : o);
 
 /* ---------------- building blocks ---------------- */
 function add(parent, geo, color, x = 0, y = 0, z = 0, o = {}) {
@@ -110,7 +126,7 @@ function gable(w, h, d) {                                                   // a
   const g = new T.ExtrudeGeometry(s, { depth: d, bevelEnabled: false }); g.translate(0, 0, -d / 2); return g;
 }
 function label(parent, text, w, h, x, y, z, o = {}) {
-  const tx = paint('label', o.color || '#f6efdc', text);
+  const tx = paint('label', o.color || '#f6efdc', text, w / h);
   return add(parent, new T.PlaneGeometry(w, h), '#ffffff', x, y, z, { map: tx, ink: false, ry: o.ry || 0, shadow: false, mat: new T.MeshBasicMaterial({ map: tx }) });
 }
 
@@ -162,7 +178,7 @@ const KIT = {
   },
   ship(g, o) { const s = o.scale || 1; KIT.boat(g, { ...o, len: 9 }); for (const x of [-2.5, 2.5]) { add(g, cyl(0.1, 0.1, 6, 6), '#5a3b2a', x, 3.5, 0); add(g, new T.PlaneGeometry(3, 3.6), '#f4ecd8', x, 4, 0, { ink: false, mat: new T.MeshToonMaterial({ color: '#f4ecd8', gradientMap: gradient(), side: T.DoubleSide }) }); } void s; },
   table(g, o) { const w = o.w || 1.8; add(g, box(w, 0.1, w * 0.6), o.color || '#9a6a3a', 0, 0.8, 0, { map: paint('wood', o.color || '#9a6a3a') }); for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) add(g, box(0.08, 0.8, 0.08), o.color || '#9a6a3a', x * (w / 2 - 0.1), 0.4, z * (w * 0.3 - 0.1)); },
-  desk(g, o) { KIT.table(g, { ...o, w: o.w || 2 }); add(g, box(0.9, 0.55, 0.06), '#2b2b33', 0, 1.15, -0.25); add(g, new T.PlaneGeometry(0.8, 0.46), '#7fd3ff', 0, 1.15, -0.21, { ink: false, mat: new T.MeshBasicMaterial({ map: paint('label', '#1d2a44', o.text || '') }) }); },
+  desk(g, o) { KIT.table(g, { ...o, w: o.w || 2 }); add(g, box(0.9, 0.55, 0.06), '#2b2b33', 0, 1.15, -0.25); add(g, new T.PlaneGeometry(0.8, 0.46), '#7fd3ff', 0, 1.15, -0.21, { ink: false, mat: new T.MeshBasicMaterial({ map: paint('label', '#1d2a44', o.text || '', 0.8 / 0.46) }) }); },
   chair(g, o) { add(g, box(0.5, 0.08, 0.5), o.color || '#8a5a3b', 0, 0.48, 0); add(g, box(0.5, 0.6, 0.06), o.color || '#8a5a3b', 0, 0.8, -0.22); for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) add(g, box(0.05, 0.48, 0.05), o.color || '#8a5a3b', x * 0.2, 0.24, z * 0.2); },
   bed(g, o) { add(g, box(1.6, 0.4, 2.2), o.color || '#7a4a2a', 0, 0.3, 0); add(g, box(1.5, 0.15, 2.1), o.color2 || '#e8e2f2', 0, 0.55, 0); add(g, box(0.9, 0.18, 0.4), '#ffffff', 0, 0.7, -0.8); },
   throne(g, o) { add(g, box(1.2, 0.5, 1), o.color || '#b8322f', 0, 0.25, 0); add(g, box(1.2, 2.2, 0.25), o.color2 || '#d9a845', 0, 1.1, -0.5); },
@@ -215,7 +231,7 @@ const KIT = {
   door(g, o) { add(g, box(1.2, 2.3, 0.15), o.color || '#7a4a2a', 0, 1.15, 0, { map: paint('planks', o.color || '#7a4a2a') }); add(g, ball(0.06, 0), '#f2c230', 0.42, 1.1, 0.1, { ink: false }); },
   plant(g, o) { add(g, cyl(0.3, 0.22, 0.5, 10), o.color2 || '#c8573d', 0, 0.25, 0); for (let i = 0; i < 6; i++) add(g, new T.SphereGeometry(0.35, 8, 6), o.color || '#3f9a5b', Math.cos(i) * 0.15, 0.75 + (i % 3) * 0.12, Math.sin(i) * 0.15, { ink: false }).scale.set(0.45, 1, 0.45); },
   tv(g, o) { KIT.screen(g, { ...o, w: o.w || 2.2, h: o.h || 1.3 }); },
-  laptop(g, o) { add(g, box(0.6, 0.03, 0.4), '#a7abb8', 0, (o.h || 0.8) + 0.02, 0); add(g, box(0.6, 0.4, 0.03), '#c9ccd6', 0, (o.h || 0.8) + 0.22, -0.2); add(g, new T.PlaneGeometry(0.54, 0.34), '#7fd3ff', 0, (o.h || 0.8) + 0.22, -0.18, { ink: false, mat: new T.MeshBasicMaterial({ map: paint('label', '#1d2a44', o.text || '') }) }); },
+  laptop(g, o) { add(g, box(0.6, 0.03, 0.4), '#a7abb8', 0, (o.h || 0.8) + 0.02, 0); add(g, box(0.6, 0.4, 0.03), '#c9ccd6', 0, (o.h || 0.8) + 0.22, -0.2); add(g, new T.PlaneGeometry(0.54, 0.34), '#7fd3ff', 0, (o.h || 0.8) + 0.22, -0.18, { ink: false, mat: new T.MeshBasicMaterial({ map: paint('label', '#1d2a44', o.text || '', 0.54 / 0.34) }) }); },
   window(g, o) { add(g, box(o.w || 2.4, o.h || 1.6, 0.2), '#5a3b2a', 0, 2, 0); add(g, new T.PlaneGeometry((o.w || 2.4) - 0.3, (o.h || 1.6) - 0.3), '#bfe4fa', 0, 2, 0.12, { ink: false, mat: new T.MeshBasicMaterial({ color: col(o.color, '#bfe4fa') }) }); },
   floodlight(g, o) { add(g, cyl(0.2, 0.28, o.h || 18, 8), '#d8dde6', 0, (o.h || 18) / 2, 0); add(g, box(3.4, 1.6, 0.4), '#ffffff', 0, (o.h || 18) + 0.8, 0, { emissive: '#ffffff', glow: 1.6 }); const L = new T.PointLight(0xf4f8ff, 60, 70, 1.6); L.position.set(0, (o.h || 18), 2); g.add(L); },
   lockers(g, o) { const n = o.n || 5, c = o.color || '#4f7fb8'; for (let i = 0; i < n; i++) { add(g, box(0.6, 2, 0.5), c, (i - (n - 1) / 2) * 0.62, 1, 0); add(g, box(0.3, 0.06, 0.02), '#dfe6f0', (i - (n - 1) / 2) * 0.62, 1.6, 0.26, { ink: false }); } },
@@ -407,8 +423,8 @@ export class World {
       if (time === 'night') { add(g, ball(4, 2), '#f5f1e1', 30, 42, -110, { emissive: '#f5f1e1', glow: 0.9, ink: false, shadow: false }); }
       if (time === 'golden' || time === 'dusk') { add(g, ball(7, 2), time === 'golden' ? '#ffd08a' : '#ff9a7a', -45, 10, -120, { emissive: time === 'golden' ? '#ffb060' : '#ff7a5a', glow: 1.2, ink: false, shadow: false }); }
     }
-    for (const o of spec.objects || []) {
-      const og = new T.Group(); og.userData.spec = o;
+    for (const o0 of spec.objects || []) {
+      const o = realSize(o0), og = new T.Group(); og.userData.spec = o;
       (KIT[o.type] || unknown)(og, o);
       og.position.set(+o.x || 0, +o.y || 0, +o.z || 0); og.rotation.y = ((+o.rot || 0) * Math.PI) / 180; og.scale.setScalar(+o.scale || 1);
       g.add(og);

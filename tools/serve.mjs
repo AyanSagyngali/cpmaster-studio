@@ -24,6 +24,11 @@ http.createServer((req, res) => {
     req.pipe(out); out.on('finish', () => { res.writeHead(200); res.end('ok'); });
     return;
   }
+  if (u.pathname === '/dev/load') {                                              // a saved test run back (replay without API calls)
+    const f = path.join(process.env.USERPROFILE || '.', 'Desktop', 'CPMaster-tests', path.basename(u.searchParams.get('name') || ''));
+    if (!fs.existsSync(f)) { res.writeHead(404); return res.end(); }
+    res.writeHead(200); return fs.createReadStream(f).pipe(res);
+  }
   const file = path.normalize(path.join(ROOT, u.pathname === '/' ? 'index.html' : decodeURIComponent(u.pathname)));
   if (!file.startsWith(ROOT) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { res.writeHead(404); return res.end(); }
   res.writeHead(200, { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });

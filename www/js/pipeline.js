@@ -205,6 +205,14 @@ async function worldVideo({ style, pack, lang, lines, segs, words, duration, voi
     story = r.story || `${story} ${chunk.map((l) => l.text).join(' ')}`.slice(-400);
     step('scenes', Math.min(lines.length, i + 3), lines.length, `Кадры по порядку: ${Math.min(lines.length, i + 3)} из ${lines.length}`);
   }
+  return assemble({ style, perLine, bible, lines, segs, words, duration, voiceTrack, W, H, fps, pack, plan, topic, useEleven, signal, step, wait, onScene, sfxMax: lines.length > 20 ? 24 : 10 });
+}
+// dev: the same picture and sound again from a saved run (no Gemini, no voice service; sounds from the library or synth)
+export function replay(saved, voiceTrack, wait = () => {}) {
+  const { lines, segs, words, bible, beats, duration } = saved;
+  return assemble({ style: 'mult', perLine: beats, bible, lines, segs, words, duration, voiceTrack, W: 1080, H: 1920, fps: 30, pack: F.STYLES.mult, plan: { title: '' }, topic: '', useEleven: true, step: () => {}, wait, sfxMax: 0 });
+}
+async function assemble({ style, perLine, bible, lines, segs, words, duration, voiceTrack, W, H, fps, pack, plan, topic, useEleven, signal, step, wait, onScene, sfxMax }) {
   // every beat starts when its word is spoken (searched forward inside its line), so the picture never lags behind the voice
   const timeline = [];
   perLine.forEach((beats, j) => {
@@ -235,7 +243,7 @@ async function worldVideo({ style, pack, lang, lines, segs, words, duration, voi
   // sound on the beats: every effect lands on its word; real sounds from the library or ElevenLabs, synth as the last resort;
   // the voice keeps its reserve of credits (it is always more important than effects); the twist's sting stops the music
   step('scenes', lines.length, lines.length, 'Звукорежиссёр подбирает эффекты');
-  const budget = { made: 0, reused: 0, max: lines.length > 20 ? 24 : 10, reserve: 2500 };
+  const budget = { made: 0, reused: 0, max: sfxMax, reserve: 2500 };
   const sfx = [];
   let stopAt = null;
   const sounds = await pool(timeline, 3, (it) => shotSound(it.shot.sfx, budget, { signal, wait }).then((pcm) => [soundTime(it.shot.sfx, it.j, words, it), pcm]));
@@ -244,7 +252,7 @@ async function worldVideo({ style, pack, lang, lines, segs, words, duration, voi
   wait(`Звуки: ${budget.made} новых от ElevenLabs, ${budget.reused} из библиотеки`);
   const audio = A.mix(voiceTrack, { mood: pack.music, sfx, stopAt });
   const job = { W, H, fps, bitrate: 7_000_000, duration, timeline, words, caption: 'shorts', plates: [], audio, rate: A.RATE, env: A.envelope(voiceTrack, 50), world: { cast: bible.cast, sets: bible.sets } };
-  return { job, plan, lines, style, bible, script: lines.map((l) => l.text).join(' '), title: plan.title || topic, voice: useEleven ? 'ElevenLabs' : 'Gemini' };
+  return { job, plan, lines, style, bible, beats: perLine, segs, voiceTrack, script: lines.map((l) => l.text).join(' '), title: plan.title || topic, voice: useEleven ? 'ElevenLabs' : 'Gemini' };
 }
 
 /* ---------------- card styles ---------------- */
