@@ -66,6 +66,13 @@ export function soonest(kind, want = () => true) {
 }
 export function cool(k, ms, note) { k.cool = Date.now() + ms; k.coolKind = /дн/.test(note || '') ? 'day' : 'minute'; if (note) k.note = note; save(); }
 
+// a key Google keeps refusing as a whole rests longer each time (30 s, 1, 2, 4 … 60 min), so it never slows the working keys
+export function rest(k, note) {
+  k.strikes = (k.strikes || 0) + 1;
+  k.cool = Date.now() + Math.min(3600e3, 30e3 * 2 ** (k.strikes - 1)); k.coolKind = 'key'; k.note = note;
+  save();
+}
+
 /* ---------------- Gemini limits: Google counts them per PROJECT (= per key here) AND per MODEL ----------------
    A daily limit on one model leaves the other models of the same key working, so limits live on (key, model):
    k.lim[model] = {kind: 'minute' | 'day' | 'none', until}. 'none' = this key's plan has no quota for the model.
@@ -93,6 +100,7 @@ export const offers = (k, m) => !k.models?.length || k.models.includes(m);
 // one key's honest state over the models the app uses: ok (some model free), minute, day
 export function geminiState(k, models, now = Date.now()) {
   if (k.ok === false) return { state: 'bad', limited: [] };
+  if (k.cool > now && k.coolKind === 'key') return { state: 'rest', until: k.cool, note: k.note, limited: [] };
   const mine = models.filter((m) => offers(k, m));
   const limited = mine.map((m) => ({ m, ...limitOf(k, m, now) })).filter((x) => x.kind);
   if (!mine.length || limited.length < mine.length) return { state: 'ok', limited };

@@ -105,3 +105,21 @@ test('ElevenLabs: "enough" counts only keys that can hold a whole piece of the v
   K.usePool([ekey(7, 800), ekey(8, 800)]);
   assert.equal(EL.enough(1400), true);
 });
+
+test('a key Google refuses as a whole ("API requests … for a region") rests longer each time and does not slow the others', async () => {
+  const bad = gkey(9), good = gkey(10); K.usePool([bad, good]);
+  const region = reply(429, { error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: "Quota exceeded for quota metric 'API requests' and limit 'Request limit per minute for a region' of service 'generativelanguage.googleapis.com'",
+    details: [{ '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason: 'RATE_LIMIT_EXCEEDED', metadata: { quota_metric: 'generativelanguage.googleapis.com/api_requests', quota_limit: 'ApiRequestsPerMinutePerProjectPerRegion' } }] } });
+  const asked = [];
+  globalThis.fetch = async (url) => { asked.push(keyOf(url)); return keyOf(url) === bad.key ? region : said('{"ok":4}'); };
+  bad.last = 0; good.last = 1;                                   // the bad key would be asked first
+  assert.deepEqual(await AI.json('x'), { ok: 4 });
+  assert.deepEqual(asked, [bad.key, good.key]);
+  const first = bad.cool - Date.now();
+  assert.ok(first > 20000 && first <= 30000, 'first rest about 30 s');
+  assert.equal(K.geminiState(bad, [A, B]).state, 'rest');
+  assert.equal(K.limitOf(bad, A), null, 'not mistaken for a model limit');
+  bad.cool = 0; asked.length = 0; bad.last = 0; good.last = Date.now();
+  await AI.json('x');
+  assert.ok(bad.cool - Date.now() > 50000, 'second refusal: the key rests twice as long');
+});

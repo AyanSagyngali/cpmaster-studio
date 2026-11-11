@@ -53,7 +53,7 @@ async function keysScreen(first) {
   const resetAt = new Date(reset).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
   const elLeft = el.filter((k) => k.ok !== false).reduce((s, k) => s + (k.left || 0), 0), shorts = Math.floor(elLeft / cost.v);
   const gs = new Map(gm.map((k) => [k, K.geminiState(k, [...new Set([...AI.MODELS.text, ...AI.MODELS.fast])], now)]));
-  const gmOk = gm.filter((k) => k.ok && gs.get(k).state === 'ok').length, gmCool = gm.filter((k) => k.ok && /minute|day/.test(gs.get(k).state)).length;
+  const gmOk = gm.filter((k) => k.ok && gs.get(k).state === 'ok').length, gmCool = gm.filter((k) => k.ok && /minute|day|rest/.test(gs.get(k).state)).length;
   const elRows = el.map((k) => {
     const total = k.total || Math.max(k.left || 0, 10000), left = k.left ?? 0, frac = Math.max(0, Math.min(1, left / total)), low = frac < 0.15, n = Math.floor(left / cost.v);
     const state = k.ok === false ? ['bad', k.note || 'не работает'] : k.ok == null ? ['', 'проверяю'] : low ? ['low', 'мало'] : ['ok', 'работает'];
@@ -62,8 +62,8 @@ async function keysScreen(first) {
       <div class="kinfo">${fmtN(left)} из ${fmtN(total)} символов · ≈ ${n} ${plural(n, 'шортс', 'шортса', 'шортсов')}${k.reset ? ` · обновится ${new Date(k.reset).toLocaleDateString('ru', { day: 'numeric', month: 'short' })}` : ''}</div></div>`;
   }).join('');
   const gmRows = gm.map((k) => {
-    const g = gs.get(k), day = g.state === 'day', cool = g.state === 'minute';
-    const state = k.ok === false ? ['bad', k.note || 'не работает'] : k.ok == null ? ['', 'проверяю'] : day ? ['low', 'дневной лимит'] : cool ? ['low', 'минутный лимит'] : ['ok', 'работает'];
+    const g = gs.get(k), day = g.state === 'day', cool = g.state === 'minute' || g.state === 'rest';
+    const state = k.ok === false ? ['bad', k.note || 'не работает'] : k.ok == null ? ['', 'проверяю'] : day ? ['low', 'дневной лимит'] : g.state === 'rest' ? ['low', 'Google режет ключ'] : cool ? ['low', 'минутный лимит'] : ['ok', 'работает'];
     // which models of this key rest and until when (Google limits each model separately)
     const parts = g.state === 'ok' ? g.limited.filter((x) => x.kind !== 'none').map((x) => `${esc(x.m.replace(/^gemini-/, ''))}: ${x.kind === 'day' ? `лимит до ${new Date(x.until).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}` : 'минутный лимит'}`) : [];
     const when = day ? ` · снова работает в ${resetAt}` : cool ? ` · освободится через <span data-cd="${g.until}"></span>` : parts.length ? ` · ${parts.join(', ')}` : '';

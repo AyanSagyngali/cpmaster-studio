@@ -35,7 +35,11 @@ export function quotaInfo(err = {}) {
   const ids = v.map((x) => `${x.quotaId || ''} ${x.quotaMetric || ''}`).join(' ');
   const num = (re) => { const x = v.find((y) => re.test(y.quotaId || '')); return x && x.quotaValue != null ? +x.quotaValue : null; };
   const retry = det.find((d) => d.retryDelay)?.retryDelay || msg.match(/retry in ([\d.]+)\s*s/i)?.[1];
+  const info = det.find((d) => d.metadata)?.metadata || {};
+  const all = `${ids} ${msg} ${info.quota_metric || ''} ${info.quota_limit || ''}`;
   return {
+    // a limit of the WHOLE key (Google's "API requests … per minute for a region"), not of one model
+    key: !v.some((x) => x.quotaDimensions?.model) && /API requests|for a region|PerRegion|api_requests/i.test(all),
     day: /PerDay/i.test(ids) || (!v.length && /per day|daily/i.test(msg)),
     zero: v.some((x) => String(x.quotaValue) === '0') || /limit: 0\b/.test(msg),
     retry: retry ? parseFloat(retry) * 1000 : 0,
@@ -53,7 +57,7 @@ const at = (t) => new Date(t).toLocaleTimeString('ru', { hour: '2-digit', minute
 // until when (key, model) can not be asked; <= now = free
 function blocked(k, m, now) {
   const l = K.limitOf(k, m, now);
-  let t = l ? l.until : 0;
+  let t = Math.max(l ? l.until : 0, k.cool || 0);           // k.cool: the whole key rests (Google limits the key itself)
   const cap = k.quota?.[m]?.minute;
   if (cap) {
     const xs = (recent.get(`${k.key}|${m}`) || []).filter((x) => x > now - 60000);
@@ -131,6 +135,7 @@ async function call(kind, body, { signal, tries = 40, onWait, think } = {}) {
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); }
     if (r.ok) {
       K.used(k, m);
+      if (k.strikes) { k.strikes = 0; k.note = 'Gemini работает'; }
       const parts = j.candidates?.[0]?.content?.parts || [];
       if (kind === 'image' || kind === 'tts') {
         const d = parts.find((p) => p.inlineData)?.inlineData;
@@ -145,6 +150,7 @@ async function call(kind, body, { signal, tries = 40, onWait, think } = {}) {
     if (r.status === 429) {
       const q = quotaInfo(j.error);
       K.learn(k, m, { day: q.perDay, minute: q.perMinute });
+      if (q.key) { K.rest(k, 'Google режет ключ: лимит запросов для региона'); lastErr = 'Google режет ключи'; continue; }
       if (q.zero) {                                              // this key's plan has no quota for this model: other models / keys go on
         if (kind === 'image') { k.image = false; K.save(); continue; }
         K.limit(k, m, 'none', K.geminiReset()); continue;
